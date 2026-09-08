@@ -132,9 +132,17 @@
             background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
             box-shadow: 0 4px 16px rgba(37, 99, 235, 0.3);
         }
+        .btn-blue:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45);
+        }
         .btn-red {
             background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);
             box-shadow: 0 4px 16px rgba(225, 29, 72, 0.3);
+        }
+        .btn-red:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(225, 29, 72, 0.45);
         }
         .btn-green {
             background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
@@ -205,6 +213,19 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+        .footer-credit {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            letter-spacing: 0.3px;
+        }
+        .footer-credit span {
+            color: #94a3b8;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -239,7 +260,7 @@
         <!-- BUTTON 1: FETCH QUALITY -->
         <button class="action-btn btn-red" id="yFetchBtn" onclick="fetchYtDetails()">Check Available Qualities</button>
 
-        <!-- DYNAMIC QUALITY SELECTOR (Fetch ke baad show hoga) -->
+        <!-- DYNAMIC QUALITY SELECTOR -->
         <div id="ytOptions" style="display: none; margin-top: 18px;">
             <div class="preview-box" id="ytPreview" style="display: none;">
                 <img id="ytThumb" src="" alt="Thumbnail">
@@ -255,6 +276,11 @@
     </div>
 
     <div id="status"></div>
+
+    <!-- FOOTER CREDIT -->
+    <div class="footer-credit">
+        Crafted with precision by <span>Himanshu Ranjan</span>
+    </div>
 </div>
 
 <script>
@@ -328,7 +354,6 @@ async function downloadUniversal() {
     }
 }
 
-// STEP 1: FETCH DETAILS
 async function fetchYtDetails() {
     const url = document.getElementById('yUrl').value.trim();
     const btn = document.getElementById('yFetchBtn');
@@ -377,7 +402,6 @@ async function fetchYtDetails() {
                 previewBox.style.display = 'flex';
             }
 
-            // High resolution options populate karein
             let optsHtml = `<option value="best">✨ Best Quality Available</option>`;
             if (data.resolutions && data.resolutions.length > 0) {
                 data.resolutions.forEach(h => {
@@ -397,7 +421,6 @@ async function fetchYtDetails() {
     }
 }
 
-// STEP 2: DOWNLOAD SELECTED FORMAT
 async function downloadSelectedQuality() {
     const quality = document.getElementById('yQualitySelect').value;
     const btn = document.getElementById('yDownloadBtn');
