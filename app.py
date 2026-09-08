@@ -3,7 +3,7 @@ import re
 import shutil
 import zipfile
 from urllib.parse import urlparse
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
 
 app = Flask(__name__)
@@ -21,7 +21,6 @@ def clean_ansi(text):
 def home():
     return render_template('index.html')
 
-# ==================== UNIVERSAL / M3U8 ROUTE ====================
 @app.route('/download-universal', methods=['POST'])
 def download_universal():
     data = request.get_json()
@@ -38,9 +37,8 @@ def download_universal():
         'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title).100s.%(ext)s'),
         'merge_output_format': 'mp4',
         'socket_timeout': 30,
-        'retries': 15,
-        'fragment_retries': 15,
-        'quiet': False,
+        'retries': 10,
+        'fragment_retries': 10,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     }
 
@@ -66,11 +64,10 @@ def download_universal():
 
             if os.path.exists(final_file):
                 return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
-            return jsonify({'error': 'Video process nahi ho paayi.'}), 500
+            return jsonify({'error': 'File process nahi ho paayi.'}), 500
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
-# ==================== STEP 1: FETCH YOUTUBE FORMATS ====================
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
     data = request.get_json()
@@ -79,13 +76,10 @@ def fetch_youtube_info():
     if not video_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
-    ydl_opts = {'extract_flat': True, 'quiet': True}
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
             info = ydl.extract_info(video_url, download=False)
             
-            # Agar Playlist hai
             if 'entries' in info:
                 return jsonify({
                     'is_playlist': True,
@@ -93,11 +87,8 @@ def fetch_youtube_info():
                     'count': len(list(info.get('entries', [])))
                 })
 
-            # Single Video: Full format metadata
             with yt_dlp.YoutubeDL({'quiet': True}) as full_ydl:
                 full_info = full_ydl.extract_info(video_url, download=False)
-                
-                # Available resolutions filter karein (unique heights)
                 available_heights = set()
                 for f in full_info.get('formats', []):
                     h = f.get('height')
@@ -112,11 +103,9 @@ def fetch_youtube_info():
                     'thumbnail': full_info.get('thumbnail', ''),
                     'resolutions': sorted_heights
                 })
-
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
-# ==================== STEP 2: DOWNLOAD CHOSEN QUALITY ====================
 @app.route('/download-youtube', methods=['POST'])
 def download_youtube():
     data = request.get_json()
@@ -128,11 +117,7 @@ def download_youtube():
         return jsonify({'error': 'URL provide karein!'}), 400
 
     try:
-        ydl_opts = {
-            'socket_timeout': 30,
-            'retries': 10,
-            'quiet': False
-        }
+        ydl_opts = {'socket_timeout': 30, 'retries': 10}
 
         if quality == 'mp3':
             ydl_opts.update({
@@ -158,7 +143,6 @@ def download_youtube():
             target_ext = 'mp4'
 
         if is_playlist:
-            # Safe playlist directory
             with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
@@ -201,6 +185,13 @@ def download_youtube():
 def get_file(filename):
     file_path = os.path.join(DOWNLOAD_DIR, filename)
     if os.path.exists(file_path):
+        @after_this_request
+        def remove_file(response):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            return response
         return send_file(file_path, as_attachment=True)
     return "File not found", 404
 
