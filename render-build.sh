@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
-# exit on error
+# Exit on error
 set -o errexit
 
-# Install python dependencies
+# Install Python requirements
 pip install -r requirements.txt
 
-# Install FFmpeg
-apt-get update && apt-get install -y ffmpeg
+# Create custom bin directory
+mkdir -p bin
+
+# Download pre-built static FFmpeg binary (No root needed)
+curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+tar -xf ffmpeg.tar.xz --strip-components 1 -C bin
+rm ffmpeg.tar.xz
+
+# Add binary to system path
+export PATH="$PWD/bin:$PATH"
