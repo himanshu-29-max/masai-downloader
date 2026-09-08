@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal & YouTube Downloader</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0b0f19;
+            color: #f1f5f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .card {
+            background-color: #1e293b;
+            padding: 30px;
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 4px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px;
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: 0.2s;
+        }
+        .tab-btn.active {
+            background: #2563eb;
+            color: #fff;
+        }
+        .tab-btn.yt-tab.active {
+            background: #dc2626;
+        }
+        input[type="text"] {
+            width: 90%;
+            padding: 12px;
+            margin: 15px 0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            background: #0f172a;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+        }
+        input[type="text"]:focus {
+            border-color: #3b82f6;
+        }
+        .action-btn {
+            width: 95%;
+            padding: 12px;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .action-btn.yt {
+            background-color: #dc2626;
+        }
+        .action-btn:disabled {
+            background-color: #64748b !important;
+            cursor: not-allowed;
+        }
+        .hint {
+            color: #94a3b8;
+            font-size: 13px;
+            margin-top: -5px;
+            margin-bottom: 10px;
+        }
+        #status {
+            margin-top: 18px;
+            font-size: 14px;
+            min-height: 22px;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <div class="tabs">
+        <button class="tab-btn active" id="tabUniversalBtn" onclick="switchTab('universal')">Direct / M3U8 Stream</button>
+        <button class="tab-btn yt-tab" id="tabYtBtn" onclick="switchTab('youtube')">YouTube / Playlist</button>
+    </div>
+
+    <!-- UNIVERSAL SECTION -->
+    <div id="universalSection">
+        <h3>M3U8 / Website Stream</h3>
+        <p class="hint">Masai CDN, direct .m3u8, ya koi bhi web video link paste karein</p>
+        <input type="text" id="urlUniversal" placeholder="https://cdn.masaischool.com/.../prog_index.m3u8">
+        <button class="action-btn" id="btnUniversal" onclick="processDownload('/download-universal', 'urlUniversal', 'btnUniversal')">Download Video</button>
+    </div>
+
+    <!-- YOUTUBE SECTION -->
+    <div id="youtubeSection" style="display: none;">
+        <h3>YouTube Downloader</h3>
+        <p class="hint">Normal video, Shorts, ya Playlist link paste karein (Original title preserve hoga)</p>
+        <input type="text" id="urlYoutube" placeholder="https://youtu.be/... ya https://youtube.com/playlist?...">
+        <button class="action-btn yt" id="btnYoutube" onclick="processDownload('/download-youtube', 'urlYoutube', 'btnYoutube')">Download YouTube Media</button>
+    </div>
+
+    <div id="status"></div>
+</div>
+
+<script>
+let currentMode = 'universal';
+
+function switchTab(mode) {
+    currentMode = mode;
+    const universalSec = document.getElementById('universalSection');
+    const ytSec = document.getElementById('youtubeSection');
+    const uBtn = document.getElementById('tabUniversalBtn');
+    const yBtn = document.getElementById('tabYtBtn');
+    const statusDiv = document.getElementById('status');
+
+    statusDiv.innerHTML = '';
+
+    if (mode === 'universal') {
+        universalSec.style.display = 'block';
+        ytSec.style.display = 'none';
+        uBtn.classList.add('active');
+        yBtn.classList.remove('active');
+    } else {
+        universalSec.style.display = 'none';
+        ytSec.style.display = 'block';
+        uBtn.classList.remove('active');
+        yBtn.classList.add('active');
+    }
+}
+
+async function processDownload(endpoint, inputId, btnId) {
+    const url = document.getElementById(inputId).value.trim();
+    const statusDiv = document.getElementById('status');
+    const btn = document.getElementById(btnId);
+
+    if (!url) {
+        statusDiv.innerHTML = '<span style="color: #ef4444;">Pehle URL paste karein!</span>';
+        return;
+    }
+
+    btn.disabled = true;
+    const oldText = btn.innerText;
+    btn.innerText = "Processing & Downloading...";
+    statusDiv.innerHTML = '<span style="color: #38bdf8;">Server media fetch aur merge kar raha hai, thoda waqt lag sakta hai...</span>';
+
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            statusDiv.innerHTML = `<span style="color: #22c55e;">Done! <b>${data.filename}</b> download shuru ho rahi hai...</span>`;
+            window.location.href = `/get-file/${encodeURIComponent(data.filename)}`;
+        } else {
+            statusDiv.innerHTML = `<span style="color: #ef4444;">Error: ${data.error}</span>`;
+        }
+    } catch (err) {
+        statusDiv.innerHTML = '<span style="color: #ef4444;">Server error / timeout ho gaya.</span>';
+    } finally {
+        btn.disabled = false;
+        btn.innerText = oldText;
+    }
+}
+</script>
+
+</body>
+</html>
