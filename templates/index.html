@@ -3,187 +3,431 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Universal & YouTube Downloader</title>
+    <title>Universal Video & Audio Studio</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #0b0f19;
-            color: #f1f5f9;
+            background: radial-gradient(circle at 10% 20%, #1e1b4b 0%, #030712 90%);
+            color: #f8fafc;
+            min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            margin: 0;
+            padding: 20px;
         }
-        .card {
-            background-color: #1e293b;
-            padding: 30px;
-            border-radius: 14px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        .container {
             width: 100%;
-            max-width: 500px;
-            text-align: center;
+            max-width: 520px;
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 32px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
         }
-        .tabs {
+        .header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa 0%, #c084fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 6px;
+        }
+        .header p {
+            color: #94a3b8;
+            font-size: 13px;
+        }
+        .tab-wrapper {
             display: flex;
-            margin-bottom: 20px;
-            background: #0f172a;
-            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 12px;
             padding: 4px;
+            margin-bottom: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
         .tab-btn {
             flex: 1;
-            padding: 10px;
-            background: none;
+            padding: 10px 16px;
             border: none;
-            color: #94a3b8;
-            font-weight: bold;
-            font-size: 14px;
-            cursor: pointer;
-            border-radius: 6px;
-            transition: 0.2s;
-        }
-        .tab-btn.active {
-            background: #2563eb;
-            color: #fff;
-        }
-        .tab-btn.yt-tab.active {
-            background: #dc2626;
-        }
-        input[type="text"] {
-            width: 90%;
-            padding: 12px;
-            margin: 15px 0;
-            border: 1px solid #334155;
-            border-radius: 6px;
-            background: #0f172a;
-            color: #fff;
-            font-size: 14px;
-            outline: none;
-        }
-        input[type="text"]:focus {
-            border-color: #3b82f6;
-        }
-        .action-btn {
-            width: 95%;
-            padding: 12px;
-            background-color: #2563eb;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 15px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        .action-btn.yt {
-            background-color: #dc2626;
-        }
-        .action-btn:disabled {
-            background-color: #64748b !important;
-            cursor: not-allowed;
-        }
-        .hint {
+            background: transparent;
             color: #94a3b8;
             font-size: 13px;
-            margin-top: -5px;
-            margin-bottom: 10px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        .tab-btn.active.universal {
+            background: #2563eb;
+            color: #ffffff;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+        }
+        .tab-btn.active.yt {
+            background: #e11d48;
+            color: #ffffff;
+            box-shadow: 0 4px 14px rgba(225, 29, 72, 0.35);
+        }
+        .input-group {
+            margin-bottom: 18px;
+            text-align: left;
+        }
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        input[type="text"], select {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        input[type="text"]:focus, select:focus {
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+        }
+        select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url('data:image/svg+xml;charset=US-ASCII,<svg%20xmlns="http://www.w3.org/2000/svg"%20width="20"%20height="20"%20viewBox="0%200%2020%2020"%20fill="%2394a3b8"><polygon%20points="5,7%2015,7%2010,12"/></svg>');
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+        }
+        select option {
+            background: #0f172a;
+            color: #fff;
+        }
+        .action-btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #ffffff;
+            margin-top: 6px;
+        }
+        .btn-blue {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.3);
+        }
+        .btn-red {
+            background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);
+            box-shadow: 0 4px 16px rgba(225, 29, 72, 0.3);
+        }
+        .btn-green {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            box-shadow: 0 4px 16px rgba(22, 163, 74, 0.3);
+        }
+        .action-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        .preview-box {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(15, 23, 42, 0.9);
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            margin-bottom: 16px;
+            text-align: left;
+        }
+        .preview-box img {
+            width: 80px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+        .preview-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #f1f5f9;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
         }
         #status {
-            margin-top: 18px;
-            font-size: 14px;
-            min-height: 22px;
-            word-break: break-word;
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            min-height: 20px;
+            display: none;
+            text-align: center;
+        }
+        .status-loading {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            color: #60a5fa;
+            display: block !important;
+        }
+        .status-success {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.25);
+            color: #4ade80;
+            display: block !important;
+        }
+        .status-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            color: #f87171;
+            display: block !important;
+        }
+        .pulse {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <div class="tabs">
-        <button class="tab-btn active" id="tabUniversalBtn" onclick="switchTab('universal')">Direct / M3U8 Stream</button>
-        <button class="tab-btn yt-tab" id="tabYtBtn" onclick="switchTab('youtube')">YouTube / Playlist</button>
+<div class="container">
+    <div class="header">
+        <h1>Media Stream Grabber</h1>
+        <p>Direct M3U8 Streams & Interactive YouTube Studio</p>
     </div>
 
-    <!-- UNIVERSAL SECTION -->
-    <div id="universalSection">
-        <h3>M3U8 / Website Stream</h3>
-        <p class="hint">Masai CDN, direct .m3u8, ya koi bhi web video link paste karein</p>
-        <input type="text" id="urlUniversal" placeholder="https://cdn.masaischool.com/.../prog_index.m3u8">
-        <button class="action-btn" id="btnUniversal" onclick="processDownload('/download-universal', 'urlUniversal', 'btnUniversal')">Download Video</button>
+    <div class="tab-wrapper">
+        <button class="tab-btn active universal" id="uTabBtn" onclick="switchTab('universal')">Direct / M3U8</button>
+        <button class="tab-btn" id="yTabBtn" onclick="switchTab('youtube')">YouTube Studio</button>
+    </div>
+
+    <!-- UNIVERSAL M3U8 SECTION -->
+    <div id="uSec">
+        <div class="input-group">
+            <label>Stream / Video URL</label>
+            <input type="text" id="uUrl" placeholder="https://cdn.masaischool.com/.../prog_index.m3u8">
+        </div>
+        <button class="action-btn btn-blue" id="uBtn" onclick="downloadUniversal()">Extract & Download Video</button>
     </div>
 
     <!-- YOUTUBE SECTION -->
-    <div id="youtubeSection" style="display: none;">
-        <h3>YouTube Downloader</h3>
-        <p class="hint">Normal video, Shorts, ya Playlist link paste karein (Original title preserve hoga)</p>
-        <input type="text" id="urlYoutube" placeholder="https://youtu.be/... ya https://youtube.com/playlist?...">
-        <button class="action-btn yt" id="btnYoutube" onclick="processDownload('/download-youtube', 'urlYoutube', 'btnYoutube')">Download YouTube Media</button>
+    <div id="ySec" style="display: none;">
+        <div class="input-group">
+            <label>YouTube Link (Video or Playlist)</label>
+            <input type="text" id="yUrl" placeholder="https://youtu.be/... ya https://youtube.com/playlist?..." oninput="resetYtState()">
+        </div>
+        
+        <!-- BUTTON 1: FETCH QUALITY -->
+        <button class="action-btn btn-red" id="yFetchBtn" onclick="fetchYtDetails()">Check Available Qualities</button>
+
+        <!-- DYNAMIC QUALITY SELECTOR (Fetch ke baad show hoga) -->
+        <div id="ytOptions" style="display: none; margin-top: 18px;">
+            <div class="preview-box" id="ytPreview" style="display: none;">
+                <img id="ytThumb" src="" alt="Thumbnail">
+                <div class="preview-title" id="ytTitle"></div>
+            </div>
+
+            <div class="input-group">
+                <label>Choose Video / Audio Resolution</label>
+                <select id="yQualitySelect"></select>
+            </div>
+            <button class="action-btn btn-green" id="yDownloadBtn" onclick="downloadSelectedQuality()">Download Now</button>
+        </div>
     </div>
 
     <div id="status"></div>
 </div>
 
 <script>
-let currentMode = 'universal';
+let ytData = {
+    url: '',
+    is_playlist: false
+};
 
 function switchTab(mode) {
-    currentMode = mode;
-    const universalSec = document.getElementById('universalSection');
-    const ytSec = document.getElementById('youtubeSection');
-    const uBtn = document.getElementById('tabUniversalBtn');
-    const yBtn = document.getElementById('tabYtBtn');
-    const statusDiv = document.getElementById('status');
-
-    statusDiv.innerHTML = '';
+    const uSec = document.getElementById('uSec');
+    const ySec = document.getElementById('ySec');
+    const uTab = document.getElementById('uTabBtn');
+    const yTab = document.getElementById('yTabBtn');
+    clearStatus();
 
     if (mode === 'universal') {
-        universalSec.style.display = 'block';
-        ytSec.style.display = 'none';
-        uBtn.classList.add('active');
-        yBtn.classList.remove('active');
+        uSec.style.display = 'block';
+        ySec.style.display = 'none';
+        uTab.className = 'tab-btn active universal';
+        yTab.className = 'tab-btn';
     } else {
-        universalSec.style.display = 'none';
-        ytSec.style.display = 'block';
-        uBtn.classList.remove('active');
-        yBtn.classList.add('active');
+        uSec.style.display = 'none';
+        ySec.style.display = 'block';
+        uTab.className = 'tab-btn';
+        yTab.className = 'tab-btn active yt';
     }
 }
 
-async function processDownload(endpoint, inputId, btnId) {
-    const url = document.getElementById(inputId).value.trim();
-    const statusDiv = document.getElementById('status');
-    const btn = document.getElementById(btnId);
+function showStatus(text, type) {
+    const s = document.getElementById('status');
+    s.className = `status-${type}`;
+    s.innerHTML = text;
+}
 
-    if (!url) {
-        statusDiv.innerHTML = '<span style="color: #ef4444;">Pehle URL paste karein!</span>';
-        return;
-    }
+function clearStatus() {
+    const s = document.getElementById('status');
+    s.style.display = 'none';
+    s.innerHTML = '';
+}
+
+function resetYtState() {
+    document.getElementById('ytOptions').style.display = 'none';
+    clearStatus();
+}
+
+async function downloadUniversal() {
+    const url = document.getElementById('uUrl').value.trim();
+    const btn = document.getElementById('uBtn');
+    if (!url) return showStatus('URL paste karna zaroori hai!', 'error');
 
     btn.disabled = true;
-    const oldText = btn.innerText;
-    btn.innerText = "Processing & Downloading...";
-    statusDiv.innerHTML = '<span style="color: #38bdf8;">Server media fetch aur merge kar raha hai, thoda waqt lag sakta hai...</span>';
+    showStatus('<span class="pulse">⏳ Media stream fetch aur merge ho rahi hai, please wait...</span>', 'loading');
 
     try {
-        const res = await fetch(endpoint, {
+        const res = await fetch('/download-universal', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ url: url })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showStatus(`✅ Download Ready: <b>${data.filename}</b>`, 'success');
+            window.location.href = `/get-file/${encodeURIComponent(data.filename)}`;
+        } else {
+            showStatus(`❌ ${data.error}`, 'error');
+        }
+    } catch (e) {
+        showStatus('❌ Server timeout ya network failure.', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// STEP 1: FETCH DETAILS
+async function fetchYtDetails() {
+    const url = document.getElementById('yUrl').value.trim();
+    const btn = document.getElementById('yFetchBtn');
+    const optionsDiv = document.getElementById('ytOptions');
+    const select = document.getElementById('yQualitySelect');
+    const previewBox = document.getElementById('ytPreview');
+
+    if (!url) return showStatus('Pehle YouTube URL paste karein!', 'error');
+
+    btn.disabled = true;
+    showStatus('<span class="pulse">🔍 Link analyze ki ja rahi hai... formats load ho rahe hain...</span>', 'loading');
+    optionsDiv.style.display = 'none';
+    select.innerHTML = '';
+
+    try {
+        const res = await fetch('/fetch-youtube-info', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ url: url })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+            showStatus(`❌ ${data.error}`, 'error');
+            return;
+        }
+
+        ytData.url = url;
+        ytData.is_playlist = data.is_playlist;
+
+        clearStatus();
+
+        if (data.is_playlist) {
+            previewBox.style.display = 'none';
+            select.innerHTML = `
+                <option value="best">📦 Best Resolution (Full Playlist)</option>
+                <option value="720">📹 720p HD (All Videos)</option>
+                <option value="480">📱 480p Standard (All Videos)</option>
+                <option value="mp3">🎵 Audio Only MP3 (All Tracks)</option>
+            `;
+            showStatus(`📁 Playlist mili: <b>${data.title}</b> (${data.count} videos)`, 'success');
+        } else {
+            if (data.thumbnail) {
+                document.getElementById('ytThumb').src = data.thumbnail;
+                document.getElementById('ytTitle').innerText = data.title;
+                previewBox.style.display = 'flex';
+            }
+
+            // High resolution options populate karein
+            let optsHtml = `<option value="best">✨ Best Quality Available</option>`;
+            if (data.resolutions && data.resolutions.length > 0) {
+                data.resolutions.forEach(h => {
+                    optsHtml += `<option value="${h}">🎬 ${h}p Video</option>`;
+                });
+            }
+            optsHtml += `<option value="mp3">🎵 MP3 Audio Only (192kbps)</option>`;
+            select.innerHTML = optsHtml;
+        }
+
+        optionsDiv.style.display = 'block';
+
+    } catch (e) {
+        showStatus('❌ Video details fetch nahi ho paayi.', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// STEP 2: DOWNLOAD SELECTED FORMAT
+async function downloadSelectedQuality() {
+    const quality = document.getElementById('yQualitySelect').value;
+    const btn = document.getElementById('yDownloadBtn');
+
+    btn.disabled = true;
+    const isAudio = quality === 'mp3';
+    showStatus(`<span class="pulse">⏳ Process shuru: ${isAudio ? 'MP3 banaya ja raha hai' : quality + ' video merge ho rahi hai'}...</span>`, 'loading');
+
+    try {
+        const res = await fetch('/download-youtube', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                url: ytData.url,
+                quality: quality,
+                is_playlist: ytData.is_playlist
+            })
         });
 
         const data = await res.json();
-
         if (res.ok) {
-            statusDiv.innerHTML = `<span style="color: #22c55e;">Done! <b>${data.filename}</b> download shuru ho rahi hai...</span>`;
+            showStatus(`✅ Ready: <b>${data.filename}</b>`, 'success');
             window.location.href = `/get-file/${encodeURIComponent(data.filename)}`;
         } else {
-            statusDiv.innerHTML = `<span style="color: #ef4444;">Error: ${data.error}</span>`;
+            showStatus(`❌ ${data.error}`, 'error');
         }
-    } catch (err) {
-        statusDiv.innerHTML = '<span style="color: #ef4444;">Server error / timeout ho gaya.</span>';
+    } catch (e) {
+        showStatus('❌ Download process me error aaya.', 'error');
     } finally {
         btn.disabled = false;
-        btn.innerText = oldText;
     }
 }
 </script>

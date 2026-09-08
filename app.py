@@ -28,7 +28,7 @@ def download_universal():
     video_url = data.get('url', '').strip()
 
     if not video_url:
-        return jsonify({'error': 'Pehle URL provide karein!'}), 400
+        return jsonify({'error': 'URL provide karein!'}), 400
 
     parsed_url = urlparse(video_url)
     domain = parsed_url.netloc.lower()
@@ -65,44 +65,111 @@ def download_universal():
                 final_file = filename
 
             if os.path.exists(final_file):
-                return jsonify({'status': 'success', 'filename': os.path.basename(final_file), 'is_playlist': False})
-            return jsonify({'error': 'File process nahi ho paayi.'}), 500
+                return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
+            return jsonify({'error': 'Video process nahi ho paayi.'}), 500
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
-# ==================== YOUTUBE & PLAYLIST ROUTE ====================
-@app.route('/download-youtube', methods=['POST'])
-def download_youtube():
+# ==================== STEP 1: FETCH YOUTUBE FORMATS ====================
+@app.route('/fetch-youtube-info', methods=['POST'])
+def fetch_youtube_info():
     data = request.get_json()
     video_url = data.get('url', '').strip()
 
     if not video_url:
-        return jsonify({'error': 'YouTube URL provide karein!'}), 400
+        return jsonify({'error': 'URL provide karein!'}), 400
+
+    ydl_opts = {'extract_flat': True, 'quiet': True}
 
     try:
-        # Pre-check: Kya yeh link playlist hai?
-        check_opts = {'extract_flat': True, 'quiet': True}
-        with yt_dlp.YoutubeDL(check_opts) as ydl:
-            info_flat = ydl.extract_info(video_url, download=False)
-            is_playlist = 'entries' in info_flat
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            
+            # Agar Playlist hai
+            if 'entries' in info:
+                return jsonify({
+                    'is_playlist': True,
+                    'title': info.get('title', 'YouTube Playlist'),
+                    'count': len(list(info.get('entries', [])))
+                })
+
+            # Single Video: Full format metadata
+            with yt_dlp.YoutubeDL({'quiet': True}) as full_ydl:
+                full_info = full_ydl.extract_info(video_url, download=False)
+                
+                # Available resolutions filter karein (unique heights)
+                available_heights = set()
+                for f in full_info.get('formats', []):
+                    h = f.get('height')
+                    if h and f.get('vcodec') != 'none':
+                        available_heights.add(h)
+
+                sorted_heights = sorted(list(available_heights), reverse=True)
+
+                return jsonify({
+                    'is_playlist': False,
+                    'title': full_info.get('title', 'YouTube Video'),
+                    'thumbnail': full_info.get('thumbnail', ''),
+                    'resolutions': sorted_heights
+                })
+
+    except Exception as e:
+        return jsonify({'error': clean_ansi(str(e))}), 500
+
+# ==================== STEP 2: DOWNLOAD CHOSEN QUALITY ====================
+@app.route('/download-youtube', methods=['POST'])
+def download_youtube():
+    data = request.get_json()
+    video_url = data.get('url', '').strip()
+    quality = data.get('quality', 'best')
+    is_playlist = data.get('is_playlist', False)
+
+    if not video_url:
+        return jsonify({'error': 'URL provide karein!'}), 400
+
+    try:
+        ydl_opts = {
+            'socket_timeout': 30,
+            'retries': 10,
+            'quiet': False
+        }
+
+        if quality == 'mp3':
+            ydl_opts.update({
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            })
+            target_ext = 'mp3'
+        elif quality == 'best':
+            ydl_opts.update({
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'merge_output_format': 'mp4'
+            })
+            target_ext = 'mp4'
+        else:
+            ydl_opts.update({
+                'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best',
+                'merge_output_format': 'mp4'
+            })
+            target_ext = 'mp4'
 
         if is_playlist:
-            playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
+            # Safe playlist directory
+            with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
+                info_flat = ydl.extract_info(video_url, download=False)
+                playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
+
             playlist_dir = os.path.join(DOWNLOAD_DIR, playlist_title)
             os.makedirs(playlist_dir, exist_ok=True)
-
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'outtmpl': os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s'),
-                'merge_output_format': 'mp4',
-                'retries': 10,
-                'quiet': False
-            }
+            ydl_opts['outtmpl'] = os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s')
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
 
-            # Poori playlist ko zip bana kar ready karein
             zip_filename = f"{playlist_title}.zip"
             zip_path = os.path.join(DOWNLOAD_DIR, zip_filename)
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -111,26 +178,21 @@ def download_youtube():
                         zipf.write(os.path.join(root, file), file)
 
             shutil.rmtree(playlist_dir, ignore_errors=True)
-            return jsonify({'status': 'success', 'filename': zip_filename, 'is_playlist': True})
+            return jsonify({'status': 'success', 'filename': zip_filename})
 
         else:
-            # Single YouTube Video
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-                'merge_output_format': 'mp4',
-                'retries': 10,
-                'noplaylist': True
-            }
+            ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s')
+            ydl_opts['noplaylist'] = True
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
                 filename = ydl.prepare_filename(info)
-                final_file = os.path.splitext(filename)[0] + '.mp4'
+                final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
+
                 if not os.path.exists(final_file) and os.path.exists(filename):
                     final_file = filename
 
-                return jsonify({'status': 'success', 'filename': os.path.basename(final_file), 'is_playlist': False})
+                return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
 
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
