@@ -11,10 +11,14 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
-COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ImageIO-FFmpeg se binary setup
+# Render secret file path aur local path dono check karein
+RENDER_COOKIE = '/etc/secrets/cookies.txt'
+LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
+COOKIE_FILE = RENDER_COOKIE if os.path.exists(RENDER_COOKIE) else LOCAL_COOKIE
+
+# FFmpeg binary auto-detect
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
@@ -24,6 +28,7 @@ def clean_ansi(text):
     return ansi_escape.sub('', text)
 
 def normalize_youtube_url(url):
+    """Clean live, shorts, and query parameters"""
     patterns = [
         r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
         r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
@@ -36,20 +41,24 @@ def normalize_youtube_url(url):
             return f"https://www.youtube.com/watch?v={match.group(1)}"
     return url
 
-YT_OPTS_BASE = {
-    'quiet': True,
-    'no_warnings': True,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android', 'ios'],
-            'player_skip': ['webpage', 'configs', 'js']
+def get_yt_base_opts():
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web_creator', 'ios', 'android'],
+                'player_skip': ['webpage', 'configs']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
         }
-    },
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
     }
-}
+    if os.path.exists(COOKIE_FILE):
+        opts['cookiefile'] = COOKIE_FILE
+    return opts
 
 @app.route('/')
 def home():
@@ -114,7 +123,7 @@ def fetch_youtube_info():
 
     video_url = normalize_youtube_url(raw_url)
 
-    ydl_opts = dict(YT_OPTS_BASE)
+    ydl_opts = get_yt_base_opts()
     ydl_opts['extract_flat'] = True
 
     try:
@@ -128,7 +137,7 @@ def fetch_youtube_info():
                     'count': len(list(info.get('entries', [])))
                 })
 
-            full_opts = dict(YT_OPTS_BASE)
+            full_opts = get_yt_base_opts()
             with yt_dlp.YoutubeDL(full_opts) as full_ydl:
                 full_info = full_ydl.extract_info(video_url, download=False)
                 available_heights = set()
@@ -163,7 +172,7 @@ def download_youtube():
     video_url = normalize_youtube_url(raw_url)
 
     try:
-        ydl_opts = dict(YT_OPTS_BASE)
+        ydl_opts = get_yt_base_opts()
         ydl_opts.update({
             'socket_timeout': 30,
             'retries': 10,
@@ -194,7 +203,7 @@ def download_youtube():
             target_ext = 'mp4'
 
         if is_playlist:
-            with yt_dlp.YoutubeDL(dict(YT_OPTS_BASE, extract_flat=True)) as ydl:
+            with yt_dlp.YoutubeDL(dict(get_yt_base_opts(), extract_flat=True)) as ydl:
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
