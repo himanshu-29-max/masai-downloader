@@ -13,10 +13,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Render secret file path aur local path dono check karein
-RENDER_COOKIE = '/etc/secrets/cookies.txt'
+# Cookie Setup: Read-only secret file ko writable /tmp me copy karein
+RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
-COOKIE_FILE = RENDER_COOKIE if os.path.exists(RENDER_COOKIE) else LOCAL_COOKIE
+WRITABLE_COOKIE = '/tmp/cookies.txt'
+
+COOKIE_FILE = None
+if os.path.exists(RENDER_SECRET_COOKIE):
+    try:
+        shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
+        COOKIE_FILE = WRITABLE_COOKIE
+    except Exception:
+        COOKIE_FILE = RENDER_SECRET_COOKIE
+elif os.path.exists(LOCAL_COOKIE):
+    COOKIE_FILE = LOCAL_COOKIE
 
 # FFmpeg binary auto-detect
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -28,7 +38,6 @@ def clean_ansi(text):
     return ansi_escape.sub('', text)
 
 def normalize_youtube_url(url):
-    """Clean live, shorts, and query parameters"""
     patterns = [
         r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
         r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
@@ -56,7 +65,7 @@ def get_yt_base_opts():
             'Accept-Language': 'en-US,en;q=0.9'
         }
     }
-    if os.path.exists(COOKIE_FILE):
+    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
         opts['cookiefile'] = COOKIE_FILE
     return opts
 
@@ -87,7 +96,7 @@ def download_universal():
     }
 
     if 'masaischool.com' in domain:
-        if os.path.exists(COOKIE_FILE):
+        if COOKIE_FILE and os.path.exists(COOKIE_FILE):
             ydl_opts['cookiefile'] = COOKIE_FILE
         ydl_opts['http_headers'] = {
             'Referer': 'https://students.masaischool.com/',
