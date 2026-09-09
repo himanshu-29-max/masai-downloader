@@ -13,7 +13,7 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Render static FFmpeg path detect karein
+# Render static FFmpeg path
 CUSTOM_BIN = os.path.join(BASE_DIR, 'bin')
 if os.path.exists(CUSTOM_BIN):
     os.environ["PATH"] = CUSTOM_BIN + os.pathsep + os.environ.get("PATH", "")
@@ -23,23 +23,30 @@ def clean_ansi(text):
     return ansi_escape.sub('', text)
 
 def normalize_youtube_url(url):
-    """YouTube /live/, /shorts/, aur ?si= tracking parameters ko clean karta hai"""
-    # /live/ID handle
+    """Clean live, shorts and tracking parameters"""
+    url = url.split('&')[0].split('?si=')[0]
+    
     live_match = re.search(r'youtube\.com/live/([a-zA-Z0-9_-]+)', url)
     if live_match:
         return f"https://www.youtube.com/watch?v={live_match.group(1)}"
     
-    # /shorts/ID handle
     shorts_match = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]+)', url)
     if shorts_match:
         return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
     
-    # youtu.be/ID handle
     short_link_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', url)
     if short_link_match:
         return f"https://www.youtube.com/watch?v={short_link_match.group(1)}"
 
     return url
+
+# Universal clients sequence that bypasses cloud IP bans
+YT_CLIENT_ARGS = {
+    'youtube': {
+        'player_client': ['mweb', 'ios', 'tv_embedded'],
+        'player_skip': ['webpage', 'configs']
+    }
+}
 
 @app.route('/')
 def home():
@@ -108,18 +115,13 @@ def fetch_youtube_info():
     ydl_opts = {
         'extract_flat': True,
         'quiet': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web']
-            }
-        }
+        'extractor_args': YT_CLIENT_ARGS
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             
-            # Agar Playlist hai
             if 'entries' in info:
                 return jsonify({
                     'is_playlist': True,
@@ -127,14 +129,9 @@ def fetch_youtube_info():
                     'count': len(list(info.get('entries', [])))
                 })
 
-            # Single Video
             full_opts = {
                 'quiet': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web']
-                    }
-                }
+                'extractor_args': YT_CLIENT_ARGS
             }
             with yt_dlp.YoutubeDL(full_opts) as full_ydl:
                 full_info = full_ydl.extract_info(video_url, download=False)
@@ -174,11 +171,7 @@ def download_youtube():
             'socket_timeout': 30,
             'retries': 10,
             'quiet': False,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web']
-                }
-            }
+            'extractor_args': YT_CLIENT_ARGS
         }
 
         if quality == 'mp3':
@@ -205,7 +198,7 @@ def download_youtube():
             target_ext = 'mp4'
 
         if is_playlist:
-            with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
+            with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True, 'extractor_args': YT_CLIENT_ARGS}) as ydl:
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
