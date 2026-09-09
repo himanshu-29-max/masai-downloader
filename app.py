@@ -2,7 +2,7 @@ import os
 import re
 import shutil
 import zipfile
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
 
@@ -23,28 +23,33 @@ def clean_ansi(text):
     return ansi_escape.sub('', text)
 
 def normalize_youtube_url(url):
-    """Clean live, shorts and tracking parameters"""
-    url = url.split('&')[0].split('?si=')[0]
-    
-    live_match = re.search(r'youtube\.com/live/([a-zA-Z0-9_-]+)', url)
-    if live_match:
-        return f"https://www.youtube.com/watch?v={live_match.group(1)}"
-    
-    shorts_match = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]+)', url)
-    if shorts_match:
-        return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
-    
-    short_link_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', url)
-    if short_link_match:
-        return f"https://www.youtube.com/watch?v={short_link_match.group(1)}"
-
+    """Clean live, shorts, youtu.be, and tracking queries"""
+    # Extract video ID directly using regex
+    patterns = [
+        r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
+        r'youtu\.be/([a-zA-Z0-9_-]{11})',
+        r'v=([a-zA-Z0-9_-]{11})'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return f"https://www.youtube.com/watch?v={match.group(1)}"
     return url
 
-# Universal clients sequence that bypasses cloud IP bans
-YT_CLIENT_ARGS = {
-    'youtube': {
-        'player_client': ['mweb', 'ios', 'tv_embedded'],
-        'player_skip': ['webpage', 'configs']
+# Universal client args for cloud IP bypass
+YT_OPTS_BASE = {
+    'quiet': True,
+    'no_warnings': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'ios'],
+            'player_skip': ['webpage', 'configs', 'js']
+        }
+    },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
     }
 }
 
@@ -71,8 +76,7 @@ def download_universal():
         'socket_timeout': 30,
         'retries': 15,
         'fragment_retries': 15,
-        'quiet': False,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'quiet': False
     }
 
     if 'masaischool.com' in domain:
@@ -112,11 +116,8 @@ def fetch_youtube_info():
 
     video_url = normalize_youtube_url(raw_url)
 
-    ydl_opts = {
-        'extract_flat': True,
-        'quiet': True,
-        'extractor_args': YT_CLIENT_ARGS
-    }
+    ydl_opts = dict(YT_OPTS_BASE)
+    ydl_opts['extract_flat'] = True
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -129,10 +130,7 @@ def fetch_youtube_info():
                     'count': len(list(info.get('entries', [])))
                 })
 
-            full_opts = {
-                'quiet': True,
-                'extractor_args': YT_CLIENT_ARGS
-            }
+            full_opts = dict(YT_OPTS_BASE)
             with yt_dlp.YoutubeDL(full_opts) as full_ydl:
                 full_info = full_ydl.extract_info(video_url, download=False)
                 available_heights = set()
@@ -167,12 +165,12 @@ def download_youtube():
     video_url = normalize_youtube_url(raw_url)
 
     try:
-        ydl_opts = {
+        ydl_opts = dict(YT_OPTS_BASE)
+        ydl_opts.update({
             'socket_timeout': 30,
             'retries': 10,
-            'quiet': False,
-            'extractor_args': YT_CLIENT_ARGS
-        }
+            'quiet': False
+        })
 
         if quality == 'mp3':
             ydl_opts.update({
@@ -198,7 +196,7 @@ def download_youtube():
             target_ext = 'mp4'
 
         if is_playlist:
-            with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True, 'extractor_args': YT_CLIENT_ARGS}) as ydl:
+            with yt_dlp.YoutubeDL(dict(YT_OPTS_BASE, extract_flat=True)) as ydl:
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
