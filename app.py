@@ -2,9 +2,10 @@ import os
 import re
 import shutil
 import zipfile
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
+import imageio_ffmpeg
 
 app = Flask(__name__)
 
@@ -13,18 +14,16 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Render static FFmpeg path
-CUSTOM_BIN = os.path.join(BASE_DIR, 'bin')
-if os.path.exists(CUSTOM_BIN):
-    os.environ["PATH"] = CUSTOM_BIN + os.pathsep + os.environ.get("PATH", "")
+# ImageIO-FFmpeg se binary setup
+ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
 def clean_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
 def normalize_youtube_url(url):
-    """Clean live, shorts, youtu.be, and tracking queries"""
-    # Extract video ID directly using regex
     patterns = [
         r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
         r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
@@ -37,7 +36,6 @@ def normalize_youtube_url(url):
             return f"https://www.youtube.com/watch?v={match.group(1)}"
     return url
 
-# Universal client args for cloud IP bypass
 YT_OPTS_BASE = {
     'quiet': True,
     'no_warnings': True,
