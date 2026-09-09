@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Cookie Setup: Read-only secret file ko writable /tmp me copy karein
+# Cookie Setup (Sirf Masai ke liye use karenge)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
@@ -28,7 +28,7 @@ if os.path.exists(RENDER_SECRET_COOKIE):
 elif os.path.exists(LOCAL_COOKIE):
     COOKIE_FILE = LOCAL_COOKIE
 
-# FFmpeg binary auto-detect
+# FFmpeg binary path
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
@@ -37,37 +37,37 @@ def clean_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
-def normalize_youtube_url(url):
+def extract_video_id(url):
+    """Har tarah ke URL se clean 11-char Video ID extract karta hai"""
     patterns = [
         r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
         r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
         r'youtu\.be/([a-zA-Z0-9_-]{11})',
-        r'v=([a-zA-Z0-9_-]{11})'
+        r'v=([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})'
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            return f"https://www.youtube.com/watch?v={match.group(1)}"
-    return url
+            return match.group(1)
+    return None
 
-def get_yt_base_opts():
-    opts = {
+def get_yt_opts():
+    """TV and Android Embedded clients bypass cloud IP restrictions completely"""
+    return {
         'quiet': True,
         'no_warnings': True,
+        'socket_timeout': 30,
         'extractor_args': {
             'youtube': {
-                'player_client': ['web_creator', 'ios', 'android'],
-                'player_skip': ['webpage', 'configs']
+                'player_client': ['tv', 'tv_embedded', 'android'],
+                'player_skip': ['webpage', 'configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'User-Agent': 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/538.1+ (KHTML, like Gecko) TV Safari/538.1+'
         }
     }
-    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
-        opts['cookiefile'] = COOKIE_FILE
-    return opts
 
 @app.route('/')
 def home():
@@ -130,39 +130,46 @@ def fetch_youtube_info():
     if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
-    video_url = normalize_youtube_url(raw_url)
-
-    ydl_opts = get_yt_base_opts()
-    ydl_opts['extract_flat'] = True
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            
-            if 'entries' in info:
+    # Check agar Playlist hai
+    if 'playlist?list=' in raw_url:
+        ydl_opts = get_yt_opts()
+        ydl_opts['extract_flat'] = True
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(raw_url, download=False)
                 return jsonify({
                     'is_playlist': True,
                     'title': info.get('title', 'YouTube Playlist'),
                     'count': len(list(info.get('entries', [])))
                 })
+        except Exception as e:
+            return jsonify({'error': clean_ansi(str(e))}), 500
 
-            full_opts = get_yt_base_opts()
-            with yt_dlp.YoutubeDL(full_opts) as full_ydl:
-                full_info = full_ydl.extract_info(video_url, download=False)
-                available_heights = set()
-                for f in full_info.get('formats', []):
-                    h = f.get('height')
-                    if h and f.get('vcodec') != 'none':
-                        available_heights.add(h)
+    # Video ID extract karein
+    vid = extract_video_id(raw_url)
+    if not vid:
+        return jsonify({'error': 'Invalid YouTube URL! Please check the link.'}), 400
 
-                sorted_heights = sorted(list(available_heights), reverse=True)
+    clean_url = f"https://www.youtube.com/watch?v={vid}"
+    ydl_opts = get_yt_opts()
 
-                return jsonify({
-                    'is_playlist': False,
-                    'title': full_info.get('title', 'YouTube Video'),
-                    'thumbnail': full_info.get('thumbnail', ''),
-                    'resolutions': sorted_heights
-                })
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as full_ydl:
+            full_info = full_ydl.extract_info(clean_url, download=False)
+            available_heights = set()
+            for f in full_info.get('formats', []):
+                h = f.get('height')
+                if h and f.get('vcodec') != 'none':
+                    available_heights.add(h)
+
+            sorted_heights = sorted(list(available_heights), reverse=True)
+
+            return jsonify({
+                'is_playlist': False,
+                'title': full_info.get('title', 'YouTube Video'),
+                'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
+                'resolutions': sorted_heights
+            })
 
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
@@ -178,12 +185,15 @@ def download_youtube():
     if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
-    video_url = normalize_youtube_url(raw_url)
+    if not is_playlist:
+        vid = extract_video_id(raw_url)
+        video_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
+    else:
+        video_url = raw_url
 
     try:
-        ydl_opts = get_yt_base_opts()
+        ydl_opts = get_yt_opts()
         ydl_opts.update({
-            'socket_timeout': 30,
             'retries': 10,
             'quiet': False
         })
@@ -212,7 +222,7 @@ def download_youtube():
             target_ext = 'mp4'
 
         if is_playlist:
-            with yt_dlp.YoutubeDL(dict(get_yt_base_opts(), extract_flat=True)) as ydl:
+            with yt_dlp.YoutubeDL(dict(get_yt_opts(), extract_flat=True)) as ydl:
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
