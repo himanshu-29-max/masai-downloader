@@ -13,14 +13,39 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Render static FFmpeg path detect karein
+CUSTOM_BIN = os.path.join(BASE_DIR, 'bin')
+if os.path.exists(CUSTOM_BIN):
+    os.environ["PATH"] = CUSTOM_BIN + os.pathsep + os.environ.get("PATH", "")
+
 def clean_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
+
+def normalize_youtube_url(url):
+    """YouTube /live/, /shorts/, aur ?si= tracking parameters ko clean karta hai"""
+    # /live/ID handle
+    live_match = re.search(r'youtube\.com/live/([a-zA-Z0-9_-]+)', url)
+    if live_match:
+        return f"https://www.youtube.com/watch?v={live_match.group(1)}"
+    
+    # /shorts/ID handle
+    shorts_match = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]+)', url)
+    if shorts_match:
+        return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
+    
+    # youtu.be/ID handle
+    short_link_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', url)
+    if short_link_match:
+        return f"https://www.youtube.com/watch?v={short_link_match.group(1)}"
+
+    return url
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
+# ==================== UNIVERSAL / M3U8 ROUTE ====================
 @app.route('/download-universal', methods=['POST'])
 def download_universal():
     data = request.get_json()
@@ -37,8 +62,9 @@ def download_universal():
         'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title).100s.%(ext)s'),
         'merge_output_format': 'mp4',
         'socket_timeout': 30,
-        'retries': 10,
-        'fragment_retries': 10,
+        'retries': 15,
+        'fragment_retries': 15,
+        'quiet': False,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     }
 
@@ -68,18 +94,32 @@ def download_universal():
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
+# ==================== STEP 1: FETCH YOUTUBE DETAILS ====================
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
     data = request.get_json()
-    video_url = data.get('url', '').strip()
+    raw_url = data.get('url', '').strip()
 
-    if not video_url:
+    if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
+    video_url = normalize_youtube_url(raw_url)
+
+    ydl_opts = {
+        'extract_flat': True,
+        'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        }
+    }
+
     try:
-        with yt_dlp.YoutubeDL({'extract_flat': True, 'quiet': True}) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             
+            # Agar Playlist hai
             if 'entries' in info:
                 return jsonify({
                     'is_playlist': True,
@@ -87,7 +127,16 @@ def fetch_youtube_info():
                     'count': len(list(info.get('entries', [])))
                 })
 
-            with yt_dlp.YoutubeDL({'quiet': True}) as full_ydl:
+            # Single Video
+            full_opts = {
+                'quiet': True,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web']
+                    }
+                }
+            }
+            with yt_dlp.YoutubeDL(full_opts) as full_ydl:
                 full_info = full_ydl.extract_info(video_url, download=False)
                 available_heights = set()
                 for f in full_info.get('formats', []):
@@ -103,21 +152,34 @@ def fetch_youtube_info():
                     'thumbnail': full_info.get('thumbnail', ''),
                     'resolutions': sorted_heights
                 })
+
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
+# ==================== STEP 2: DOWNLOAD SELECTED FORMAT ====================
 @app.route('/download-youtube', methods=['POST'])
 def download_youtube():
     data = request.get_json()
-    video_url = data.get('url', '').strip()
+    raw_url = data.get('url', '').strip()
     quality = data.get('quality', 'best')
     is_playlist = data.get('is_playlist', False)
 
-    if not video_url:
+    if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
+    video_url = normalize_youtube_url(raw_url)
+
     try:
-        ydl_opts = {'socket_timeout': 30, 'retries': 10}
+        ydl_opts = {
+            'socket_timeout': 30,
+            'retries': 10,
+            'quiet': False,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']
+                }
+            }
+        }
 
         if quality == 'mp3':
             ydl_opts.update({
@@ -181,6 +243,7 @@ def download_youtube():
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
+# ==================== FILE DELIVERY & AUTO CLEANUP ====================
 @app.route('/get-file/<path:filename>')
 def get_file(filename):
     file_path = os.path.join(DOWNLOAD_DIR, filename)
