@@ -326,13 +326,14 @@ function resetYtState() {
     clearStatus();
 }
 
+// Timeout-proof background download with polling
 async function downloadUniversal() {
     const url = document.getElementById('uUrl').value.trim();
     const btn = document.getElementById('uBtn');
     if (!url) return showStatus('URL paste karna zaroori hai!', 'error');
 
     btn.disabled = true;
-    showStatus('<span class="pulse">⏳ Media stream fetch aur merge ho rahi hai, please wait...</span>', 'loading');
+    showStatus('<span class="pulse">⏳ Stream connect ho rahi hai... Segment downloading start...</span>', 'loading');
 
     try {
         const res = await fetch('/download-universal', {
@@ -341,16 +342,43 @@ async function downloadUniversal() {
             body: JSON.stringify({ url: url })
         });
         const data = await res.json();
-        if (res.ok) {
-            showStatus(`✅ Download Ready: <b>${data.filename}</b>`, 'success');
-            window.location.href = `/get-file/${encodeURIComponent(data.filename)}`;
-        } else {
+
+        if (!res.ok) {
             showStatus(`❌ ${data.error}`, 'error');
+            btn.disabled = false;
+            return;
         }
+
+        const taskId = data.task_id;
+        let pollCount = 0;
+        
+        // Render 100s timeout se bachne ke liye har 3s me background status check
+        const poll = setInterval(async () => {
+            pollCount++;
+            try {
+                const sRes = await fetch(`/task-status/${taskId}`);
+                const sData = await sRes.json();
+
+                if (sData.status === 'done') {
+                    clearInterval(poll);
+                    btn.disabled = false;
+                    showStatus(`✅ Download Ready: <b>${sData.filename}</b>`, 'success');
+                    window.location.href = `/get-file/${encodeURIComponent(sData.filename)}`;
+                } else if (sData.status === 'error') {
+                    clearInterval(poll);
+                    btn.disabled = false;
+                    showStatus(`❌ ${sData.error}`, 'error');
+                } else {
+                    showStatus(`<span class="pulse">⏳ Video segments download & merge ho rahe hain (${pollCount * 3}s)...</span>`, 'loading');
+                }
+            } catch (err) {
+                // Network glitch ignore and keep polling
+            }
+        }, 3000);
+
     } catch (e) {
-        showStatus('❌ Server timeout ya network failure.', 'error');
-    } finally {
         btn.disabled = false;
+        showStatus('❌ Network error! Please try again.', 'error');
     }
 }
 
