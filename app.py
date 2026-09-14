@@ -15,22 +15,22 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Masai Cookies Path
+# Cookie Setup (Sirf Masai ke liye)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
 
-MASAI_COOKIE_FILE = None
+MASAI_COOKIE = None
 if os.path.exists(RENDER_SECRET_COOKIE):
     try:
         shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
-        MASAI_COOKIE_FILE = WRITABLE_COOKIE
+        MASAI_COOKIE = WRITABLE_COOKIE
     except Exception:
-        MASAI_COOKIE_FILE = RENDER_SECRET_COOKIE
+        MASAI_COOKIE = RENDER_SECRET_COOKIE
 elif os.path.exists(LOCAL_COOKIE):
-    MASAI_COOKIE_FILE = LOCAL_COOKIE
+    MASAI_COOKIE = LOCAL_COOKIE
 
-# FFmpeg setup
+# FFmpeg Path Setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
@@ -63,21 +63,23 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Bypasses datacenter bot-check using mweb & android_creator fallback"""
+    """Bypasses datacenter bot block on Render by using iOS client headers"""
     return {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
+        'nocheckcertificate': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['mweb', 'android_creator', 'web'],
-                'player_skip': ['configs', 'js']
+                'player_client': ['ios', 'android_creator'],
+                'player_skip': ['webpage', 'configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+            'User-Agent': 'com.google.ios.youtube/19.10.1 (iPhone14,3; U; CPU iOS 17_4 like Mac OS X)',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Sec-Fetch-Mode': 'navigate'
+            'X-YouTube-Client-Name': '5',
+            'X-YouTube-Client-Version': '19.10.1'
         }
     }
 
@@ -85,7 +87,7 @@ def get_yt_opts():
 def home():
     return render_template('index.html')
 
-# ==================== UNIVERSAL / M3U8 DOWNLOAD ====================
+# ==================== UNIVERSAL / M3U8 ====================
 def run_universal_download(task_id, video_url):
     try:
         parsed_url = urlparse(video_url)
@@ -102,8 +104,8 @@ def run_universal_download(task_id, video_url):
         }
 
         if 'masaischool.com' in domain:
-            if MASAI_COOKIE_FILE and os.path.exists(MASAI_COOKIE_FILE):
-                ydl_opts['cookiefile'] = MASAI_COOKIE_FILE
+            if MASAI_COOKIE and os.path.exists(MASAI_COOKIE):
+                ydl_opts['cookiefile'] = MASAI_COOKIE
             ydl_opts['http_headers'] = {
                 'Referer': 'https://students.masaischool.com/',
                 'Origin': 'https://students.masaischool.com'
@@ -123,7 +125,7 @@ def run_universal_download(task_id, video_url):
             if os.path.exists(final_file):
                 TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
             else:
-                TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
+                TASKS[task_id] = {'status': 'error', 'error': 'Video merge failed.'}
     except Exception as e:
         TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
@@ -152,7 +154,7 @@ def task_status(task_id):
         return jsonify({'status': 'error', 'error': 'Task not found'}), 404
     return jsonify(task)
 
-# ==================== YOUTUBE ROUTES ====================
+# ==================== YOUTUBE ====================
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
     data = request.get_json()
