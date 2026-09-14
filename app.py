@@ -1,7 +1,9 @@
 import os
 import re
+import uuid
 import shutil
 import zipfile
+import threading
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
@@ -13,32 +15,41 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Cookie Setup (Sirf Masai ke liye use karenge)
+# Cookie Setup (Sirf Masai ke liye save rakhenge)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
 
-COOKIE_FILE = None
+MASAI_COOKIE_FILE = None
 if os.path.exists(RENDER_SECRET_COOKIE):
     try:
         shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
-        COOKIE_FILE = WRITABLE_COOKIE
+        MASAI_COOKIE_FILE = WRITABLE_COOKIE
     except Exception:
-        COOKIE_FILE = RENDER_SECRET_COOKIE
+        MASAI_COOKIE_FILE = RENDER_SECRET_COOKIE
 elif os.path.exists(LOCAL_COOKIE):
-    COOKIE_FILE = LOCAL_COOKIE
+    MASAI_COOKIE_FILE = LOCAL_COOKIE
 
-# FFmpeg binary path
+# FFmpeg binary path auto setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
+# Task Tracker for Background Downloads
+TASKS = {}
+
 def clean_ansi(text):
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi_escape.sub('', text)
+    return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
+
+def fix_m3u8_url(url):
+    clean = url.strip()
+    if 'masaischool.com' in clean and not clean.endswith('.m3u8'):
+        if not clean.endswith('/'):
+            clean += '/'
+        clean += 'master.m3u8'
+    return clean
 
 def extract_video_id(url):
-    """Har tarah ke URL se clean 11-char Video ID extract karta hai"""
     patterns = [
         r'youtube\.com/live/([a-zA-Z0-9_-]{11})',
         r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
@@ -46,26 +57,27 @@ def extract_video_id(url):
         r'v=([a-zA-Z0-9_-]{11})',
         r'youtube\.com/embed/([a-zA-Z0-9_-]{11})'
     ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
     return None
 
 def get_yt_opts():
-    """TV and Android Embedded clients bypass cloud IP restrictions completely"""
+    """Cloud IP bypass: iOS/Android native client bypasses bot check on Datacenters"""
     return {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv', 'tv_embedded', 'android'],
+                'player_client': ['ios', 'android'],
                 'player_skip': ['webpage', 'configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/538.1+ (KHTML, like Gecko) TV Safari/538.1+'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+            'Accept-Language': 'en-US,en;q=0.9'
         }
     }
 
@@ -73,41 +85,34 @@ def get_yt_opts():
 def home():
     return render_template('index.html')
 
-# ==================== UNIVERSAL / M3U8 ROUTE ====================
-@app.route('/download-universal', methods=['POST'])
-def download_universal():
-    data = request.get_json()
-    video_url = data.get('url', '').strip()
-
-    if not video_url:
-        return jsonify({'error': 'URL provide karein!'}), 400
-
-    parsed_url = urlparse(video_url)
-    domain = parsed_url.netloc.lower()
-
-    ydl_opts = {
-        'format': 'bestvideo+bestaudio/best',
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title).100s.%(ext)s'),
-        'merge_output_format': 'mp4',
-        'socket_timeout': 30,
-        'retries': 15,
-        'fragment_retries': 15,
-        'quiet': False
-    }
-
-    if 'masaischool.com' in domain:
-        if COOKIE_FILE and os.path.exists(COOKIE_FILE):
-            ydl_opts['cookiefile'] = COOKIE_FILE
-        ydl_opts['http_headers'] = {
-            'Referer': 'https://students.masaischool.com/',
-            'Origin': 'https://students.masaischool.com'
-        }
-    else:
-        ydl_opts['http_headers'] = {
-            'Referer': f"{parsed_url.scheme}://{parsed_url.netloc}/"
-        }
-
+# ==================== ASYNC TASK RUNNER (UNIVERSAL / M3U8) ====================
+def run_universal_download(task_id, video_url):
     try:
+        parsed_url = urlparse(video_url)
+        domain = parsed_url.netloc.lower()
+
+        ydl_opts = {
+            'format': 'bestvideo+bestaudio/best',
+            'outtmpl': os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title).100s.%(ext)s"),
+            'merge_output_format': 'mp4',
+            'socket_timeout': 30,
+            'retries': 15,
+            'fragment_retries': 15,
+            'quiet': False
+        }
+
+        if 'masaischool.com' in domain:
+            if MASAI_COOKIE_FILE and os.path.exists(MASAI_COOKIE_FILE):
+                ydl_opts['cookiefile'] = MASAI_COOKIE_FILE
+            ydl_opts['http_headers'] = {
+                'Referer': 'https://students.masaischool.com/',
+                'Origin': 'https://students.masaischool.com'
+            }
+        else:
+            ydl_opts['http_headers'] = {
+                'Referer': f"{parsed_url.scheme}://{parsed_url.netloc}/"
+            }
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             filename = ydl.prepare_filename(info)
@@ -116,12 +121,38 @@ def download_universal():
                 final_file = filename
 
             if os.path.exists(final_file):
-                return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
-            return jsonify({'error': 'File process nahi ho paayi.'}), 500
+                TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
+            else:
+                TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        return jsonify({'error': clean_ansi(str(e))}), 500
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
-# ==================== STEP 1: FETCH YOUTUBE DETAILS ====================
+@app.route('/download-universal', methods=['POST'])
+def download_universal():
+    data = request.get_json()
+    raw_url = data.get('url', '').strip()
+
+    if not raw_url:
+        return jsonify({'error': 'URL provide karein!'}), 400
+
+    video_url = fix_m3u8_url(raw_url)
+    task_id = str(uuid.uuid4())[:8]
+    TASKS[task_id] = {'status': 'processing'}
+
+    t = threading.Thread(target=run_universal_download, args=(task_id, video_url))
+    t.daemon = True
+    t.start()
+
+    return jsonify({'status': 'started', 'task_id': task_id})
+
+@app.route('/task-status/<task_id>')
+def task_status(task_id):
+    task = TASKS.get(task_id)
+    if not task:
+        return jsonify({'status': 'error', 'error': 'Task not found'}), 404
+    return jsonify(task)
+
+# ==================== YOUTUBE ROUTES ====================
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
     data = request.get_json()
@@ -130,7 +161,6 @@ def fetch_youtube_info():
     if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
-    # Check agar Playlist hai
     if 'playlist?list=' in raw_url:
         ydl_opts = get_yt_opts()
         ydl_opts['extract_flat'] = True
@@ -145,16 +175,13 @@ def fetch_youtube_info():
         except Exception as e:
             return jsonify({'error': clean_ansi(str(e))}), 500
 
-    # Video ID extract karein
     vid = extract_video_id(raw_url)
     if not vid:
-        return jsonify({'error': 'Invalid YouTube URL! Please check the link.'}), 400
+        return jsonify({'error': 'Invalid YouTube URL!'}), 400
 
     clean_url = f"https://www.youtube.com/watch?v={vid}"
-    ydl_opts = get_yt_opts()
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as full_ydl:
+        with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
             full_info = full_ydl.extract_info(clean_url, download=False)
             available_heights = set()
             for f in full_info.get('formats', []):
@@ -170,11 +197,9 @@ def fetch_youtube_info():
                 'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
                 'resolutions': sorted_heights
             })
-
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
-# ==================== STEP 2: DOWNLOAD SELECTED FORMAT ====================
 @app.route('/download-youtube', methods=['POST'])
 def download_youtube():
     data = request.get_json()
@@ -193,10 +218,7 @@ def download_youtube():
 
     try:
         ydl_opts = get_yt_opts()
-        ydl_opts.update({
-            'retries': 10,
-            'quiet': False
-        })
+        ydl_opts.update({'retries': 10, 'quiet': False})
 
         if quality == 'mp3':
             ydl_opts.update({
@@ -256,11 +278,9 @@ def download_youtube():
                     final_file = filename
 
                 return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
-
     except Exception as e:
         return jsonify({'error': clean_ansi(str(e))}), 500
 
-# ==================== FILE DELIVERY & AUTO CLEANUP ====================
 @app.route('/get-file/<path:filename>')
 def get_file(filename):
     file_path = os.path.join(DOWNLOAD_DIR, filename)
