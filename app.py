@@ -15,7 +15,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Cookie Setup (Sirf Masai ke liye save rakhenge)
+# Masai Cookies Path
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
@@ -30,12 +30,11 @@ if os.path.exists(RENDER_SECRET_COOKIE):
 elif os.path.exists(LOCAL_COOKIE):
     MASAI_COOKIE_FILE = LOCAL_COOKIE
 
-# FFmpeg binary path auto setup
+# FFmpeg setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
-# Task Tracker for Background Downloads
 TASKS = {}
 
 def clean_ansi(text):
@@ -64,20 +63,21 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Cloud IP bypass: iOS/Android native client bypasses bot check on Datacenters"""
+    """Bypasses datacenter bot-check using mweb & android_creator fallback"""
     return {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android'],
-                'player_skip': ['webpage', 'configs', 'js']
+                'player_client': ['mweb', 'android_creator', 'web'],
+                'player_skip': ['configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate'
         }
     }
 
@@ -85,7 +85,7 @@ def get_yt_opts():
 def home():
     return render_template('index.html')
 
-# ==================== ASYNC TASK RUNNER (UNIVERSAL / M3U8) ====================
+# ==================== UNIVERSAL / M3U8 DOWNLOAD ====================
 def run_universal_download(task_id, video_url):
     try:
         parsed_url = urlparse(video_url)
