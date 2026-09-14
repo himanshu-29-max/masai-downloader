@@ -30,7 +30,7 @@ if os.path.exists(RENDER_SECRET_COOKIE):
 elif os.path.exists(LOCAL_COOKIE):
     MASAI_COOKIE = LOCAL_COOKIE
 
-# FFmpeg Path Setup
+# FFmpeg setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
@@ -63,7 +63,7 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Bypasses datacenter bot block on Render by using iOS client headers"""
+    """Bypasses datacenter bot-check without cookies"""
     return {
         'quiet': True,
         'no_warnings': True,
@@ -71,15 +71,14 @@ def get_yt_opts():
         'nocheckcertificate': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android_creator'],
+                'player_client': ['tv_embedded', 'android_creator'],
                 'player_skip': ['webpage', 'configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'com.google.ios.youtube/19.10.1 (iPhone14,3; U; CPU iOS 17_4 like Mac OS X)',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
-            'X-YouTube-Client-Name': '5',
-            'X-YouTube-Client-Version': '19.10.1'
+            'Sec-Fetch-Mode': 'navigate'
         }
     }
 
@@ -87,7 +86,7 @@ def get_yt_opts():
 def home():
     return render_template('index.html')
 
-# ==================== UNIVERSAL / M3U8 ====================
+# ==================== UNIVERSAL / M3U8 DOWNLOAD ====================
 def run_universal_download(task_id, video_url):
     try:
         parsed_url = urlparse(video_url)
@@ -125,7 +124,7 @@ def run_universal_download(task_id, video_url):
             if os.path.exists(final_file):
                 TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
             else:
-                TASKS[task_id] = {'status': 'error', 'error': 'Video merge failed.'}
+                TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
         TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
@@ -154,7 +153,7 @@ def task_status(task_id):
         return jsonify({'status': 'error', 'error': 'Task not found'}), 404
     return jsonify(task)
 
-# ==================== YOUTUBE ====================
+# ==================== YOUTUBE ROUTES ====================
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
     data = request.get_json()
