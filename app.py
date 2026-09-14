@@ -15,7 +15,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Cookie Setup (Sirf Masai ke liye)
+# Cookie Setup (Masai ke liye)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
@@ -29,6 +29,21 @@ if os.path.exists(RENDER_SECRET_COOKIE):
         MASAI_COOKIE = RENDER_SECRET_COOKIE
 elif os.path.exists(LOCAL_COOKIE):
     MASAI_COOKIE = LOCAL_COOKIE
+
+# Cookie Setup (YouTube ke liye - bot-check bypass)
+RENDER_SECRET_YT_COOKIE = '/etc/secrets/youtube_cookies.txt'
+LOCAL_YT_COOKIE = os.path.join(BASE_DIR, 'youtube_cookies.txt')
+WRITABLE_YT_COOKIE = '/tmp/youtube_cookies.txt'
+
+YOUTUBE_COOKIE = None
+if os.path.exists(RENDER_SECRET_YT_COOKIE):
+    try:
+        shutil.copyfile(RENDER_SECRET_YT_COOKIE, WRITABLE_YT_COOKIE)
+        YOUTUBE_COOKIE = WRITABLE_YT_COOKIE
+    except Exception:
+        YOUTUBE_COOKIE = RENDER_SECRET_YT_COOKIE
+elif os.path.exists(LOCAL_YT_COOKIE):
+    YOUTUBE_COOKIE = LOCAL_YT_COOKIE
 
 # FFmpeg setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -63,16 +78,15 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Bypasses datacenter bot-check without cookies"""
-    return {
+    """Bypasses YouTube bot-check using cookies (when available) + working player_client combo"""
+    opts = {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'android_creator'],
-                'player_skip': ['webpage', 'configs', 'js']
+                'player_client': ['default', '-tv']
             }
         },
         'http_headers': {
@@ -81,6 +95,9 @@ def get_yt_opts():
             'Sec-Fetch-Mode': 'navigate'
         }
     }
+    if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
+        opts['cookiefile'] = YOUTUBE_COOKIE
+    return opts
 
 @app.route('/')
 def home():
