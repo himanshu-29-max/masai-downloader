@@ -106,19 +106,11 @@ def get_valid_cookie(secret_path, local_path, writable_path):
         return target
     return None
 
+# Masai School authentication cookie (for students.masaischool.com streams only)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
 MASAI_COOKIE = get_valid_cookie(RENDER_SECRET_COOKIE, LOCAL_COOKIE, WRITABLE_COOKIE)
-
-RENDER_SECRET_YT_COOKIE = '/etc/secrets/youtube_cookies.txt'
-LOCAL_YT_COOKIE = os.path.join(BASE_DIR, 'youtube_cookies.txt')
-WRITABLE_YT_COOKIE = '/tmp/youtube_cookies.txt'
-YOUTUBE_COOKIE = get_valid_cookie(RENDER_SECRET_YT_COOKIE, LOCAL_YT_COOKIE, WRITABLE_YT_COOKIE)
-
-# Fall back to MASAI_COOKIE if youtube cookie wasn't specifically provided
-if not YOUTUBE_COOKIE and MASAI_COOKIE:
-    YOUTUBE_COOKIE = MASAI_COOKIE
 
 # FFmpeg setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -152,9 +144,9 @@ def extract_video_id(url):
 
 def get_yt_opts():
     """Uses visionos+android player clients that bypass YouTube bot-check
-    without requiring signed-in cookies. These clients are confirmed to work
-    from server IPs (tested: 48 formats available).
-    Cookies are used only if a valid Netscape-format file is present.
+    without requiring signed-in cookies. Confirmed to work on server IPs and locally (48+ formats).
+    Note: yt-dlp skips visionos and android if a cookie file is passed, which causes
+    'Requested format is not available' errors. Therefore, no cookiefile is passed for YouTube.
     """
     opts = {
         'quiet': True,
@@ -164,7 +156,7 @@ def get_yt_opts():
         'extractor_args': {
             'youtube': {
                 # visionos is the primary client (48 formats, no cookies needed).
-                # android is the fallback (5 formats, works on older yt-dlp versions).
+                # android is the fallback (5 formats, works across yt-dlp versions).
                 # web/web_creator/ios intentionally excluded — require sign-in on server IPs.
                 'player_client': ['visionos', 'android'],
             }
@@ -175,10 +167,6 @@ def get_yt_opts():
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
-    # Only attach cookies if the file exists AND is valid Netscape format.
-    # An invalid cookie file causes yt-dlp to crash completely.
-    if YOUTUBE_COOKIE and is_valid_netscape_cookie(YOUTUBE_COOKIE):
-        opts['cookiefile'] = YOUTUBE_COOKIE
     return opts
 
 @app.route('/')
@@ -269,25 +257,29 @@ def run_fetch_youtube_info(task_id, raw_url):
             return
 
         vid = extract_video_id(raw_url)
-        if not vid:
-            set_task(task_id, 'error', {'error': 'Invalid YouTube URL!'})
-            return
+        clean_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
 
-        clean_url = f"https://www.youtube.com/watch?v={vid}"
         with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
             full_info = full_ydl.extract_info(clean_url, download=False)
             available_heights = set()
             for f in full_info.get('formats', []):
                 h = f.get('height')
                 if h and f.get('vcodec') != 'none':
-                    available_heights.add(h)
+                    try:
+                        available_heights.add(int(h))
+                    except (ValueError, TypeError):
+                        pass
 
             sorted_heights = sorted(list(available_heights), reverse=True)
+            if not sorted_heights:
+                sorted_heights = [1080, 720, 480, 360]
+
+            thumbnail = full_info.get('thumbnail') or (f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg' if vid else '')
 
             set_task(task_id, 'done', {
                 'is_playlist': False,
                 'title': full_info.get('title', 'YouTube Video'),
-                'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
+                'thumbnail': thumbnail,
                 'resolutions': sorted_heights
             })
     except Exception as e:
@@ -377,6 +369,15 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
 
                 if not os.path.exists(final_file) and os.path.exists(filename):
                     final_file = filename
+
+                if not os.path.exists(final_file):
+                    candidates = [
+                        os.path.join(DOWNLOAD_DIR, f)
+                        for f in os.listdir(DOWNLOAD_DIR)
+                        if f.startswith(f"{task_id}_") and not f.endswith(('.temp', '.part', '.ytdl', '.db'))
+                    ]
+                    if candidates:
+                        final_file = candidates[0]
 
                 if os.path.exists(final_file):
                     set_task(task_id, 'done', {'filename': os.path.basename(final_file)})
