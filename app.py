@@ -163,12 +163,13 @@ def get_yt_opts():
         'nocheckcertificate': True,
         'extractor_args': {
             'youtube': {
-                # visionos + android work without sign-in from server IPs.
-                # 'web' and 'web_creator' require authenticated cookies on
-                # cloud server IPs - they are intentionally excluded.
-                'player_client': ['visionos', 'android']
+                # visionos is the primary client (48 formats, no cookies needed).
+                # android is the fallback (5 formats, works on older yt-dlp versions).
+                # web/web_creator/ios intentionally excluded — require sign-in on server IPs.
+                'player_client': ['visionos', 'android'],
             }
         },
+        'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
