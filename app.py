@@ -123,16 +123,19 @@ def get_youtube_cookie():
     1. YOUTUBE_COOKIES environment variable (easiest to set on Render)
     2. Render secret files (/etc/secrets/youtube_cookies.txt, /etc/secrets/cookies.txt)
     3. Local cookie files
-    Only returns a path if real logged-in tokens are found (to avoid poisoning requests with dummy cookies).
+    Always copies the cookie to a writable directory (/tmp/ or DOWNLOAD_DIR) because
+    Render mounts /etc/secrets as a READ-ONLY filesystem, and yt-dlp tries to write
+    session updates back to the cookiefile causing '[Errno 30] Read-only file system'.
     """
+    writable_file = '/tmp/yt_cookies.txt' if os.path.exists('/tmp') else os.path.join(DOWNLOAD_DIR, 'yt_cookies.txt')
+
     env_cookies = os.environ.get('YOUTUBE_COOKIES', '').strip()
     if env_cookies:
-        cookie_file = '/tmp/yt_cookies.txt' if os.path.exists('/tmp') else os.path.join(DOWNLOAD_DIR, 'yt_cookies.txt')
         try:
-            with open(cookie_file, 'w', encoding='utf-8') as f:
+            with open(writable_file, 'w', encoding='utf-8') as f:
                 f.write(env_cookies)
-            if is_valid_netscape_cookie(cookie_file) and has_login_cookies(cookie_file):
-                return cookie_file
+            if is_valid_netscape_cookie(writable_file) and has_login_cookies(writable_file):
+                return writable_file
         except Exception as e:
             print("Error saving YOUTUBE_COOKIES env var:", e)
 
@@ -144,7 +147,12 @@ def get_youtube_cookie():
     ]
     for c in candidates:
         if os.path.exists(c) and is_valid_netscape_cookie(c) and has_login_cookies(c):
-            return c
+            try:
+                shutil.copyfile(c, writable_file)
+                return writable_file
+            except Exception as e:
+                print(f"Error copying {c} to writable {writable_file}:", e)
+                return c
 
     return None
 
