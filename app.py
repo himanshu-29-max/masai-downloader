@@ -4,9 +4,6 @@ import uuid
 import shutil
 import zipfile
 import threading
-import sqlite3
-import json
-import time
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
@@ -18,154 +15,42 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ==================== PERSISTENT TASK STORAGE (SQLite) ====================
-# Multi-worker gunicorn setups (e.g. Render) run separate processes that don't
-# share in-memory dictionaries. SQLite provides shared, ACID-compliant storage
-# accessible by all workers and threads without extra services.
-DB_PATH = os.path.join(DOWNLOAD_DIR, 'tasks.db')
-
-def init_db():
-    try:
-        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
-            conn.execute('PRAGMA journal_mode=WAL;')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id TEXT PRIMARY KEY,
-                    status TEXT,
-                    data TEXT,
-                    updated_at REAL
-                )
-            ''')
-    except Exception as e:
-        print("DB init error:", e)
-
-init_db()
-
-def set_task(task_id, status, extra_data=None):
-    try:
-        data_json = json.dumps(extra_data) if extra_data else '{}'
-        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
-            conn.execute('''
-                INSERT INTO tasks (task_id, status, data, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(task_id) DO UPDATE SET
-                    status=excluded.status,
-                    data=excluded.data,
-                    updated_at=excluded.updated_at
-            ''', (task_id, status, data_json, time.time()))
-    except Exception as e:
-        print(f"Error set_task {task_id}:", e)
-
-def get_task(task_id):
-    try:
-        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
-            cur = conn.cursor()
-            cur.execute('SELECT status, data FROM tasks WHERE task_id = ?', (task_id,))
-            row = cur.fetchone()
-            if row:
-                status, data_json = row
-                res = {'status': status}
-                if data_json:
-                    try:
-                        res.update(json.loads(data_json))
-                    except Exception:
-                        pass
-                return res
-    except Exception as e:
-        print(f"Error get_task {task_id}:", e)
-    return None
-
-# ==================== COOKIE VALIDATION & SETUP ====================
-def is_valid_netscape_cookie(filepath):
-    if not filepath or not os.path.exists(filepath):
-        return False
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            for _ in range(10):
-                line = f.readline()
-                if not line:
-                    break
-                if '# Netscape' in line or '\t' in line:
-                    return True
-    except Exception:
-        pass
-    return False
-
-def get_valid_cookie(secret_path, local_path, writable_path):
-    target = None
-    if os.path.exists(secret_path):
-        try:
-            shutil.copyfile(secret_path, writable_path)
-            target = writable_path
-        except Exception:
-            target = secret_path
-    elif os.path.exists(local_path):
-        target = local_path
-
-    if target and is_valid_netscape_cookie(target):
-        return target
-    return None
-
-def has_login_cookies(cookie_path):
-    """Checks whether the cookie file contains actual authenticated account tokens."""
-    if not cookie_path or not os.path.exists(cookie_path):
-        return False
-    try:
-        with open(cookie_path, 'r', encoding='utf-8', errors='ignore') as f:
-            text = f.read()
-            auth_tokens = ['SAPISID', 'LOGIN_INFO', 'SID', '__Secure-3PAPISID', '__Secure-1PSID', '__Secure-3PSID', 'SSID']
-            return any(tok in text for tok in auth_tokens)
-    except Exception:
-        return False
-
-def get_youtube_cookie():
-    """Detects authenticated YouTube cookies from:
-    1. YOUTUBE_COOKIES environment variable (easiest to set on Render)
-    2. Render secret files (/etc/secrets/youtube_cookies.txt, /etc/secrets/cookies.txt)
-    3. Local cookie files
-    Always copies the cookie to a writable directory (/tmp/ or DOWNLOAD_DIR) because
-    Render mounts /etc/secrets as a READ-ONLY filesystem, and yt-dlp tries to write
-    session updates back to the cookiefile causing '[Errno 30] Read-only file system'.
-    """
-    writable_file = '/tmp/yt_cookies.txt' if os.path.exists('/tmp') else os.path.join(DOWNLOAD_DIR, 'yt_cookies.txt')
-
-    env_cookies = os.environ.get('YOUTUBE_COOKIES', '').strip()
-    if env_cookies:
-        try:
-            with open(writable_file, 'w', encoding='utf-8') as f:
-                f.write(env_cookies)
-            if is_valid_netscape_cookie(writable_file) and has_login_cookies(writable_file):
-                return writable_file
-        except Exception as e:
-            print("Error saving YOUTUBE_COOKIES env var:", e)
-
-    candidates = [
-        '/etc/secrets/youtube_cookies.txt',
-        '/etc/secrets/cookies.txt',
-        os.path.join(BASE_DIR, 'youtube_cookies.txt'),
-        os.path.join(BASE_DIR, 'cookies.txt'),
-    ]
-    for c in candidates:
-        if os.path.exists(c) and is_valid_netscape_cookie(c) and has_login_cookies(c):
-            try:
-                shutil.copyfile(c, writable_file)
-                return writable_file
-            except Exception as e:
-                print(f"Error copying {c} to writable {writable_file}:", e)
-                return c
-
-    return None
-
-# Masai School authentication cookie (for students.masaischool.com streams only)
+# Cookie Setup (Masai ke liye)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
-MASAI_COOKIE = get_valid_cookie(RENDER_SECRET_COOKIE, LOCAL_COOKIE, WRITABLE_COOKIE)
+
+MASAI_COOKIE = None
+if os.path.exists(RENDER_SECRET_COOKIE):
+    try:
+        shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
+        MASAI_COOKIE = WRITABLE_COOKIE
+    except Exception:
+        MASAI_COOKIE = RENDER_SECRET_COOKIE
+elif os.path.exists(LOCAL_COOKIE):
+    MASAI_COOKIE = LOCAL_COOKIE
+
+# Cookie Setup (YouTube ke liye - bot-check bypass)
+RENDER_SECRET_YT_COOKIE = '/etc/secrets/youtube_cookies.txt'
+LOCAL_YT_COOKIE = os.path.join(BASE_DIR, 'youtube_cookies.txt')
+WRITABLE_YT_COOKIE = '/tmp/youtube_cookies.txt'
+
+YOUTUBE_COOKIE = None
+if os.path.exists(RENDER_SECRET_YT_COOKIE):
+    try:
+        shutil.copyfile(RENDER_SECRET_YT_COOKIE, WRITABLE_YT_COOKIE)
+        YOUTUBE_COOKIE = WRITABLE_YT_COOKIE
+    except Exception:
+        YOUTUBE_COOKIE = RENDER_SECRET_YT_COOKIE
+elif os.path.exists(LOCAL_YT_COOKIE):
+    YOUTUBE_COOKIE = LOCAL_YT_COOKIE
 
 # FFmpeg setup
 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 ffmpeg_dir = os.path.dirname(ffmpeg_exe)
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+TASKS = {}
 
 def clean_ansi(text):
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
@@ -193,63 +78,34 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Builds optimal YouTube extractor options:
-    - If valid login cookies are detected, uses 'web' client with the cookiefile.
-    - Otherwise, uses 'visionos' + 'android' clients which bypass bot checks without login.
-    """
-    cookie_path = get_youtube_cookie()
+    """Bypasses YouTube bot-check using cookies (when available) + working player_client combo"""
     opts = {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
-        'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],
+        'extractor_args': {
+            'youtube': {
+                # YouTube's 2025-2026 SABR rollout strips playable formats
+                # from the plain 'web' clients unless a PO (Proof-of-Origin)
+                # token is supplied - which this app doesn't generate. 'tv',
+                # 'tv_embedded' and 'android_vr' are, for now, less affected
+                # and often still return real formats without one.
+                # 'android_sdkless' stays excluded (yt-dlp #15712, HTTP 403
+                # on MP4 formats). This list is a moving target - YouTube
+                # changes which clients work every few weeks.
+                'player_client': ['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless']
+            }
+        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate'
         }
     }
-    if cookie_path:
-        opts['cookiefile'] = cookie_path
-        opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['web', 'web_safari', 'default']
-            }
-        }
-    else:
-        opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['visionos', 'android']
-            }
-        }
+    if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
+        opts['cookiefile'] = YOUTUBE_COOKIE
     return opts
-
-def extract_youtube_with_fallback(ydl_opts_base, video_url, download=False):
-    """Tries primary player_client options, and automatically falls back to alternative
-    clients (android, web_safari) if a bot challenge or format error occurs.
-    """
-    initial_client = ydl_opts_base.get('extractor_args', {}).get('youtube', {}).get('player_client', ['visionos', 'android'])
-    client_trials = [initial_client, ['android'], ['web_safari']]
-    unique_trials = []
-    for ct in client_trials:
-        if ct not in unique_trials:
-            unique_trials.append(ct)
-
-    last_err = None
-    for client_list in unique_trials:
-        cur_opts = dict(ydl_opts_base)
-        cur_opts['extractor_args'] = {'youtube': {'player_client': client_list}}
-        try:
-            with yt_dlp.YoutubeDL(cur_opts) as ydl:
-                return ydl.extract_info(video_url, download=download), ydl
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            if "Sign in to confirm you're not a bot" not in err_str and "Requested format is not available" not in err_str:
-                raise e
-
-    if last_err:
-        raise last_err
 
 @app.route('/')
 def home():
@@ -272,7 +128,7 @@ def run_universal_download(task_id, video_url):
         }
 
         if 'masaischool.com' in domain:
-            if MASAI_COOKIE and is_valid_netscape_cookie(MASAI_COOKIE):
+            if MASAI_COOKIE and os.path.exists(MASAI_COOKIE):
                 ydl_opts['cookiefile'] = MASAI_COOKIE
             ydl_opts['http_headers'] = {
                 'Referer': 'https://students.masaischool.com/',
@@ -291,11 +147,11 @@ def run_universal_download(task_id, video_url):
                 final_file = filename
 
             if os.path.exists(final_file):
-                set_task(task_id, 'done', {'filename': os.path.basename(final_file)})
+                TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
             else:
-                set_task(task_id, 'error', {'error': 'Video merge process failed.'})
+                TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        set_task(task_id, 'error', {'error': clean_ansi(str(e))})
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
 @app.route('/download-universal', methods=['POST'])
 def download_universal():
@@ -307,7 +163,7 @@ def download_universal():
 
     video_url = fix_m3u8_url(raw_url)
     task_id = str(uuid.uuid4())[:8]
-    set_task(task_id, 'processing')
+    TASKS[task_id] = {'status': 'processing'}
 
     t = threading.Thread(target=run_universal_download, args=(task_id, video_url))
     t.daemon = True
@@ -317,13 +173,17 @@ def download_universal():
 
 @app.route('/task-status/<task_id>')
 def task_status(task_id):
-    task = get_task(task_id)
+    task = TASKS.get(task_id)
     if not task:
-        # Avoid premature 404 which can abort frontend polling on multi-worker delays
-        return jsonify({'status': 'processing', 'retry': True}), 200
+        return jsonify({'status': 'error', 'error': 'Task not found'}), 404
     return jsonify(task)
 
 # ==================== YOUTUBE ROUTES ====================
+# Pulling full format info involves YouTube's bot-check + cookies + JS
+# challenge solving, which can take longer than gunicorn's/Render's request
+# timeout. Run it in the background like the download routes so a slow
+# lookup doesn't come back as a dead connection (which shows up in the
+# browser as a JSON-parse failure, not a real error).
 def run_fetch_youtube_info(task_id, raw_url):
     try:
         if 'playlist?list=' in raw_url:
@@ -331,47 +191,39 @@ def run_fetch_youtube_info(task_id, raw_url):
             ydl_opts['extract_flat'] = True
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(raw_url, download=False)
-                set_task(task_id, 'done', {
+                TASKS[task_id] = {
+                    'status': 'done',
                     'is_playlist': True,
                     'title': info.get('title', 'YouTube Playlist'),
                     'count': len(list(info.get('entries', [])))
-                })
+                }
             return
 
         vid = extract_video_id(raw_url)
-        clean_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
+        if not vid:
+            TASKS[task_id] = {'status': 'error', 'error': 'Invalid YouTube URL!'}
+            return
 
-        full_info, _ = extract_youtube_with_fallback(get_yt_opts(), clean_url, download=False)
-        available_heights = set()
-        for f in full_info.get('formats', []):
-            h = f.get('height')
-            if h and f.get('vcodec') != 'none':
-                try:
-                    available_heights.add(int(h))
-                except (ValueError, TypeError):
-                    pass
+        clean_url = f"https://www.youtube.com/watch?v={vid}"
+        with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
+            full_info = full_ydl.extract_info(clean_url, download=False)
+            available_heights = set()
+            for f in full_info.get('formats', []):
+                h = f.get('height')
+                if h and f.get('vcodec') != 'none':
+                    available_heights.add(h)
 
-        sorted_heights = sorted(list(available_heights), reverse=True)
-        if not sorted_heights:
-            sorted_heights = [1080, 720, 480, 360]
+            sorted_heights = sorted(list(available_heights), reverse=True)
 
-        thumbnail = full_info.get('thumbnail') or (f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg' if vid else '')
-
-        set_task(task_id, 'done', {
-            'is_playlist': False,
-            'title': full_info.get('title', 'YouTube Video'),
-            'thumbnail': thumbnail,
-            'resolutions': sorted_heights
-        })
+            TASKS[task_id] = {
+                'status': 'done',
+                'is_playlist': False,
+                'title': full_info.get('title', 'YouTube Video'),
+                'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
+                'resolutions': sorted_heights
+            }
     except Exception as e:
-        err_msg = clean_ansi(str(e))
-        if "Sign in to confirm you're not a bot" in err_msg or "bot" in err_msg.lower():
-            err_msg = (
-                "YouTube bot-check triggered on server IP. "
-                "To resolve, export your YouTube cookies using the 'Get cookies.txt LOCALLY' extension, "
-                "then add them as an Environment Variable named YOUTUBE_COOKIES in your Render Dashboard."
-            )
-        set_task(task_id, 'error', {'error': err_msg})
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
@@ -382,7 +234,7 @@ def fetch_youtube_info():
         return jsonify({'error': 'URL provide karein!'}), 400
 
     task_id = str(uuid.uuid4())[:8]
-    set_task(task_id, 'processing')
+    TASKS[task_id] = {'status': 'processing'}
 
     t = threading.Thread(target=run_fetch_youtube_info, args=(task_id, raw_url))
     t.daemon = True
@@ -390,6 +242,10 @@ def fetch_youtube_info():
 
     return jsonify({'status': 'started', 'task_id': task_id})
 
+# Runs on a background thread so a slow/long video doesn't hit Render's
+# ~100s request timeout - the same fix already applied to the universal
+# downloader, now applied here too since YouTube downloads were still
+# synchronous and would time out on anything but very short videos.
 def run_youtube_download(task_id, raw_url, quality, is_playlist):
     playlist_dir = None
     try:
@@ -430,6 +286,8 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
+            # Prefix with task_id so two people downloading playlists with
+            # the same title at the same time don't collide on disk.
             playlist_dir = os.path.join(DOWNLOAD_DIR, f"{task_id}_{playlist_title}")
             os.makedirs(playlist_dir, exist_ok=True)
             ydl_opts['outtmpl'] = os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s')
@@ -444,42 +302,30 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
                     for file in files:
                         zipf.write(os.path.join(root, file), file)
 
-            set_task(task_id, 'done', {'filename': zip_filename})
+            TASKS[task_id] = {'status': 'done', 'filename': zip_filename}
 
         else:
             ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title)s.%(ext)s")
             ydl_opts['noplaylist'] = True
 
-            info, ydl = extract_youtube_with_fallback(ydl_opts, video_url, download=True)
-            filename = ydl.prepare_filename(info)
-            final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                filename = ydl.prepare_filename(info)
+                final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
 
-            if not os.path.exists(final_file) and os.path.exists(filename):
-                final_file = filename
+                if not os.path.exists(final_file) and os.path.exists(filename):
+                    final_file = filename
 
-            if not os.path.exists(final_file):
-                candidates = [
-                    os.path.join(DOWNLOAD_DIR, f)
-                    for f in os.listdir(DOWNLOAD_DIR)
-                    if f.startswith(f"{task_id}_") and not f.endswith(('.temp', '.part', '.ytdl', '.db'))
-                ]
-                if candidates:
-                    final_file = candidates[0]
-
-            if os.path.exists(final_file):
-                set_task(task_id, 'done', {'filename': os.path.basename(final_file)})
-            else:
-                set_task(task_id, 'error', {'error': 'Video merge process failed.'})
+                if os.path.exists(final_file):
+                    TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
+                else:
+                    TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        err_msg = clean_ansi(str(e))
-        if "Sign in to confirm you're not a bot" in err_msg or "bot" in err_msg.lower():
-            err_msg = (
-                "YouTube bot-check triggered on server IP. "
-                "To resolve, export your YouTube cookies using the 'Get cookies.txt LOCALLY' extension, "
-                "then add them as an Environment Variable named YOUTUBE_COOKIES in your Render Dashboard."
-            )
-        set_task(task_id, 'error', {'error': err_msg})
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
     finally:
+        # Always clean up the per-playlist working folder, even if the
+        # download failed partway through - previously a failed playlist
+        # download left partial files behind on disk forever.
         if playlist_dir and os.path.exists(playlist_dir):
             shutil.rmtree(playlist_dir, ignore_errors=True)
 
@@ -494,7 +340,7 @@ def download_youtube():
         return jsonify({'error': 'URL provide karein!'}), 400
 
     task_id = str(uuid.uuid4())[:8]
-    set_task(task_id, 'processing')
+    TASKS[task_id] = {'status': 'processing'}
 
     t = threading.Thread(target=run_youtube_download, args=(task_id, raw_url, quality, is_playlist))
     t.daemon = True
@@ -504,6 +350,8 @@ def download_youtube():
 
 @app.route('/get-file/<path:filename>')
 def get_file(filename):
+    # Strip any directory components so a filename like "../../etc/passwd"
+    # can't be used to escape DOWNLOAD_DIR (path traversal).
     safe_name = os.path.basename(filename)
     file_path = os.path.realpath(os.path.join(DOWNLOAD_DIR, safe_name))
     if not file_path.startswith(os.path.realpath(DOWNLOAD_DIR) + os.sep):
@@ -520,5 +368,8 @@ def get_file(filename):
     return "File not found", 404
 
 if __name__ == '__main__':
+    # Never run with the Werkzeug debugger enabled in production - it lets
+    # anyone who can reach an error page execute arbitrary code. Only turn
+    # it on locally by explicitly setting FLASK_DEBUG=1.
     debug_mode = os.environ.get('FLASK_DEBUG') == '1'
     app.run(debug=debug_mode, port=int(os.environ.get('PORT', 5000)), threaded=True)
