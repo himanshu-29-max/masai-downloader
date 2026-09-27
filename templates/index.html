@@ -288,8 +288,10 @@ let ytData = {
     url: '',
     is_playlist: false
 };
+let activePoll = null;
 
 function switchTab(mode) {
+    if (activePoll) { clearInterval(activePoll); activePoll = null; }
     const uSec = document.getElementById('uSec');
     const ySec = document.getElementById('ySec');
     const uTab = document.getElementById('uTabBtn');
@@ -322,6 +324,7 @@ function clearStatus() {
 }
 
 function resetYtState() {
+    if (activePoll) { clearInterval(activePoll); activePoll = null; }
     document.getElementById('ytOptions').style.display = 'none';
     clearStatus();
 }
@@ -331,6 +334,8 @@ async function downloadUniversal() {
     const url = document.getElementById('uUrl').value.trim();
     const btn = document.getElementById('uBtn');
     if (!url) return showStatus('URL paste karna zaroori hai!', 'error');
+
+    if (activePoll) { clearInterval(activePoll); activePoll = null; }
 
     btn.disabled = true;
     showStatus('<span class="pulse">⏳ Stream connect ho rahi hai... Segment downloading start...</span>', 'loading');
@@ -352,20 +357,21 @@ async function downloadUniversal() {
         const taskId = data.task_id;
         let pollCount = 0;
         
-        // Render 100s timeout se bachne ke liye har 3s me background status check
-        const poll = setInterval(async () => {
+        activePoll = setInterval(async () => {
             pollCount++;
             try {
                 const sRes = await fetch(`/task-status/${taskId}`);
                 const sData = await sRes.json();
 
                 if (sData.status === 'done') {
-                    clearInterval(poll);
+                    clearInterval(activePoll);
+                    activePoll = null;
                     btn.disabled = false;
                     showStatus(`✅ Download Ready: <b>${sData.filename}</b>`, 'success');
                     window.location.href = `/get-file/${encodeURIComponent(sData.filename)}`;
                 } else if (sData.status === 'error') {
-                    clearInterval(poll);
+                    clearInterval(activePoll);
+                    activePoll = null;
                     btn.disabled = false;
                     showStatus(`❌ ${sData.error}`, 'error');
                 } else {
@@ -391,6 +397,8 @@ async function fetchYtDetails() {
 
     if (!url) return showStatus('Pehle YouTube URL paste karein!', 'error');
 
+    if (activePoll) { clearInterval(activePoll); activePoll = null; }
+
     btn.disabled = true;
     showStatus('<span class="pulse">🔍 Link analyze ki ja rahi hai... formats load ho rahe hain...</span>', 'loading');
     optionsDiv.style.display = 'none';
@@ -405,47 +413,74 @@ async function fetchYtDetails() {
         const data = await res.json();
 
         if (!res.ok) {
-            showStatus(`❌ ${data.error}`, 'error');
+            showStatus(`❌ ${data.error || 'Failed to inspect link'}`, 'error');
+            btn.disabled = false;
             return;
         }
 
-        ytData.url = url;
-        ytData.is_playlist = data.is_playlist;
+        const taskId = data.task_id;
+        let pollCount = 0;
 
-        clearStatus();
+        activePoll = setInterval(async () => {
+            pollCount++;
+            try {
+                const sRes = await fetch(`/task-status/${taskId}`);
+                const sData = await sRes.json();
 
-        if (data.is_playlist) {
-            previewBox.style.display = 'none';
-            select.innerHTML = `
-                <option value="best">📦 Best Resolution (Full Playlist)</option>
-                <option value="720">📹 720p HD (All Videos)</option>
-                <option value="480">📱 480p Standard (All Videos)</option>
-                <option value="mp3">🎵 Audio Only MP3 (All Tracks)</option>
-            `;
-            showStatus(`📁 Playlist mili: <b>${data.title}</b> (${data.count} videos)`, 'success');
-        } else {
-            if (data.thumbnail) {
-                document.getElementById('ytThumb').src = data.thumbnail;
-                document.getElementById('ytTitle').innerText = data.title;
-                previewBox.style.display = 'flex';
+                if (sData.status === 'done') {
+                    clearInterval(activePoll);
+                    activePoll = null;
+                    btn.disabled = false;
+
+                    ytData.url = url;
+                    ytData.is_playlist = sData.is_playlist;
+
+                    clearStatus();
+
+                    if (sData.is_playlist) {
+                        previewBox.style.display = 'none';
+                        select.innerHTML = `
+                            <option value="best">📦 Best Resolution (Full Playlist)</option>
+                            <option value="720">📹 720p HD (All Videos)</option>
+                            <option value="480">📱 480p Standard (All Videos)</option>
+                            <option value="mp3">🎵 Audio Only MP3 (All Tracks)</option>
+                        `;
+                        showStatus(`📁 Playlist mili: <b>${sData.title}</b> (${sData.count} videos)`, 'success');
+                    } else {
+                        if (sData.thumbnail) {
+                            document.getElementById('ytThumb').src = sData.thumbnail;
+                            document.getElementById('ytTitle').innerText = sData.title;
+                            previewBox.style.display = 'flex';
+                        }
+
+                        let optsHtml = `<option value="best">✨ Best Quality Available</option>`;
+                        if (sData.resolutions && sData.resolutions.length > 0) {
+                            sData.resolutions.forEach(h => {
+                                optsHtml += `<option value="${h}">🎬 ${h}p Video</option>`;
+                            });
+                        }
+                        optsHtml += `<option value="mp3">🎵 MP3 Audio Only (192kbps)</option>`;
+                        select.innerHTML = optsHtml;
+                    }
+
+                    optionsDiv.style.display = 'block';
+
+                } else if (sData.status === 'error') {
+                    clearInterval(activePoll);
+                    activePoll = null;
+                    btn.disabled = false;
+                    showStatus(`❌ ${sData.error}`, 'error');
+                } else {
+                    showStatus(`<span class="pulse">🔍 Link analyze ki ja rahi hai (${pollCount * 2}s)...</span>`, 'loading');
+                }
+            } catch (err) {
+                // Ignore transient polling errors
             }
-
-            let optsHtml = `<option value="best">✨ Best Quality Available</option>`;
-            if (data.resolutions && data.resolutions.length > 0) {
-                data.resolutions.forEach(h => {
-                    optsHtml += `<option value="${h}">🎬 ${h}p Video</option>`;
-                });
-            }
-            optsHtml += `<option value="mp3">🎵 MP3 Audio Only (192kbps)</option>`;
-            select.innerHTML = optsHtml;
-        }
-
-        optionsDiv.style.display = 'block';
+        }, 2000);
 
     } catch (e) {
-        showStatus('❌ Video details fetch nahi ho paayi.', 'error');
-    } finally {
         btn.disabled = false;
+        showStatus('❌ Video details fetch nahi ho paayi.', 'error');
     }
 }
 
@@ -453,9 +488,13 @@ async function downloadSelectedQuality() {
     const quality = document.getElementById('yQualitySelect').value;
     const btn = document.getElementById('yDownloadBtn');
 
+    if (!ytData.url) return showStatus('Video link nahi mila!', 'error');
+
+    if (activePoll) { clearInterval(activePoll); activePoll = null; }
+
     btn.disabled = true;
     const isAudio = quality === 'mp3';
-    showStatus(`<span class="pulse">⏳ Process shuru: ${isAudio ? 'MP3 banaya ja raha hai' : quality + ' video merge ho rahi hai'}...</span>`, 'loading');
+    showStatus(`<span class="pulse">⏳ Process shuru: ${isAudio ? 'MP3 banaya ja raha hai' : quality + ' video download ho rahi hai'}...</span>`, 'loading');
 
     try {
         const res = await fetch('/download-youtube', {
@@ -469,16 +508,43 @@ async function downloadSelectedQuality() {
         });
 
         const data = await res.json();
-        if (res.ok) {
-            showStatus(`✅ Ready: <b>${data.filename}</b>`, 'success');
-            window.location.href = `/get-file/${encodeURIComponent(data.filename)}`;
-        } else {
-            showStatus(`❌ ${data.error}`, 'error');
+        if (!res.ok) {
+            btn.disabled = false;
+            showStatus(`❌ ${data.error || 'Download start nahi ho paya'}`, 'error');
+            return;
         }
+
+        const taskId = data.task_id;
+        let pollCount = 0;
+
+        activePoll = setInterval(async () => {
+            pollCount++;
+            try {
+                const sRes = await fetch(`/task-status/${taskId}`);
+                const sData = await sRes.json();
+
+                if (sData.status === 'done') {
+                    clearInterval(activePoll);
+                    activePoll = null;
+                    btn.disabled = false;
+                    showStatus(`✅ Ready: <b>${sData.filename}</b>`, 'success');
+                    window.location.href = `/get-file/${encodeURIComponent(sData.filename)}`;
+                } else if (sData.status === 'error') {
+                    clearInterval(activePoll);
+                    activePoll = null;
+                    btn.disabled = false;
+                    showStatus(`❌ ${sData.error}`, 'error');
+                } else {
+                    showStatus(`<span class="pulse">⏳ ${isAudio ? 'Audio extract ho raha hai' : 'Video download & merge ho rahi hai'} (${pollCount * 3}s)...</span>`, 'loading');
+                }
+            } catch (err) {
+                // Ignore transient network errors
+            }
+        }, 3000);
+
     } catch (e) {
-        showStatus('❌ Download process me error aaya.', 'error');
-    } finally {
         btn.disabled = false;
+        showStatus('❌ Download process me error aaya.', 'error');
     }
 }
 </script>
