@@ -106,6 +106,48 @@ def get_valid_cookie(secret_path, local_path, writable_path):
         return target
     return None
 
+def has_login_cookies(cookie_path):
+    """Checks whether the cookie file contains actual authenticated account tokens."""
+    if not cookie_path or not os.path.exists(cookie_path):
+        return False
+    try:
+        with open(cookie_path, 'r', encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+            auth_tokens = ['SAPISID', 'LOGIN_INFO', 'SID', '__Secure-3PAPISID', '__Secure-1PSID', '__Secure-3PSID', 'SSID']
+            return any(tok in text for tok in auth_tokens)
+    except Exception:
+        return False
+
+def get_youtube_cookie():
+    """Detects authenticated YouTube cookies from:
+    1. YOUTUBE_COOKIES environment variable (easiest to set on Render)
+    2. Render secret files (/etc/secrets/youtube_cookies.txt, /etc/secrets/cookies.txt)
+    3. Local cookie files
+    Only returns a path if real logged-in tokens are found (to avoid poisoning requests with dummy cookies).
+    """
+    env_cookies = os.environ.get('YOUTUBE_COOKIES', '').strip()
+    if env_cookies:
+        cookie_file = '/tmp/yt_cookies.txt' if os.path.exists('/tmp') else os.path.join(DOWNLOAD_DIR, 'yt_cookies.txt')
+        try:
+            with open(cookie_file, 'w', encoding='utf-8') as f:
+                f.write(env_cookies)
+            if is_valid_netscape_cookie(cookie_file) and has_login_cookies(cookie_file):
+                return cookie_file
+        except Exception as e:
+            print("Error saving YOUTUBE_COOKIES env var:", e)
+
+    candidates = [
+        '/etc/secrets/youtube_cookies.txt',
+        '/etc/secrets/cookies.txt',
+        os.path.join(BASE_DIR, 'youtube_cookies.txt'),
+        os.path.join(BASE_DIR, 'cookies.txt'),
+    ]
+    for c in candidates:
+        if os.path.exists(c) and is_valid_netscape_cookie(c) and has_login_cookies(c):
+            return c
+
+    return None
+
 # Masai School authentication cookie (for students.masaischool.com streams only)
 RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
@@ -143,31 +185,63 @@ def extract_video_id(url):
     return None
 
 def get_yt_opts():
-    """Uses visionos+android player clients that bypass YouTube bot-check
-    without requiring signed-in cookies. Confirmed to work on server IPs and locally (48+ formats).
-    Note: yt-dlp skips visionos and android if a cookie file is passed, which causes
-    'Requested format is not available' errors. Therefore, no cookiefile is passed for YouTube.
+    """Builds optimal YouTube extractor options:
+    - If valid login cookies are detected, uses 'web' client with the cookiefile.
+    - Otherwise, uses 'visionos' + 'android' clients which bypass bot checks without login.
     """
+    cookie_path = get_youtube_cookie()
     opts = {
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
-        'extractor_args': {
-            'youtube': {
-                # visionos is the primary client (48 formats, no cookies needed).
-                # android is the fallback (5 formats, works across yt-dlp versions).
-                # web/web_creator/ios intentionally excluded — require sign-in on server IPs.
-                'player_client': ['visionos', 'android'],
-            }
-        },
         'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['web', 'web_safari', 'default']
+            }
+        }
+    else:
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['visionos', 'android']
+            }
+        }
     return opts
+
+def extract_youtube_with_fallback(ydl_opts_base, video_url, download=False):
+    """Tries primary player_client options, and automatically falls back to alternative
+    clients (android, web_safari) if a bot challenge or format error occurs.
+    """
+    initial_client = ydl_opts_base.get('extractor_args', {}).get('youtube', {}).get('player_client', ['visionos', 'android'])
+    client_trials = [initial_client, ['android'], ['web_safari']]
+    unique_trials = []
+    for ct in client_trials:
+        if ct not in unique_trials:
+            unique_trials.append(ct)
+
+    last_err = None
+    for client_list in unique_trials:
+        cur_opts = dict(ydl_opts_base)
+        cur_opts['extractor_args'] = {'youtube': {'player_client': client_list}}
+        try:
+            with yt_dlp.YoutubeDL(cur_opts) as ydl:
+                return ydl.extract_info(video_url, download=download), ydl
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if "Sign in to confirm you're not a bot" not in err_str and "Requested format is not available" not in err_str:
+                raise e
+
+    if last_err:
+        raise last_err
 
 @app.route('/')
 def home():
@@ -259,31 +333,37 @@ def run_fetch_youtube_info(task_id, raw_url):
         vid = extract_video_id(raw_url)
         clean_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
 
-        with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
-            full_info = full_ydl.extract_info(clean_url, download=False)
-            available_heights = set()
-            for f in full_info.get('formats', []):
-                h = f.get('height')
-                if h and f.get('vcodec') != 'none':
-                    try:
-                        available_heights.add(int(h))
-                    except (ValueError, TypeError):
-                        pass
+        full_info, _ = extract_youtube_with_fallback(get_yt_opts(), clean_url, download=False)
+        available_heights = set()
+        for f in full_info.get('formats', []):
+            h = f.get('height')
+            if h and f.get('vcodec') != 'none':
+                try:
+                    available_heights.add(int(h))
+                except (ValueError, TypeError):
+                    pass
 
-            sorted_heights = sorted(list(available_heights), reverse=True)
-            if not sorted_heights:
-                sorted_heights = [1080, 720, 480, 360]
+        sorted_heights = sorted(list(available_heights), reverse=True)
+        if not sorted_heights:
+            sorted_heights = [1080, 720, 480, 360]
 
-            thumbnail = full_info.get('thumbnail') or (f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg' if vid else '')
+        thumbnail = full_info.get('thumbnail') or (f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg' if vid else '')
 
-            set_task(task_id, 'done', {
-                'is_playlist': False,
-                'title': full_info.get('title', 'YouTube Video'),
-                'thumbnail': thumbnail,
-                'resolutions': sorted_heights
-            })
+        set_task(task_id, 'done', {
+            'is_playlist': False,
+            'title': full_info.get('title', 'YouTube Video'),
+            'thumbnail': thumbnail,
+            'resolutions': sorted_heights
+        })
     except Exception as e:
-        set_task(task_id, 'error', {'error': clean_ansi(str(e))})
+        err_msg = clean_ansi(str(e))
+        if "Sign in to confirm you're not a bot" in err_msg or "bot" in err_msg.lower():
+            err_msg = (
+                "YouTube bot-check triggered on server IP. "
+                "To resolve, export your YouTube cookies using the 'Get cookies.txt LOCALLY' extension, "
+                "then add them as an Environment Variable named YOUTUBE_COOKIES in your Render Dashboard."
+            )
+        set_task(task_id, 'error', {'error': err_msg})
 
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
@@ -362,29 +442,35 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
             ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title)s.%(ext)s")
             ydl_opts['noplaylist'] = True
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                filename = ydl.prepare_filename(info)
-                final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
+            info, ydl = extract_youtube_with_fallback(ydl_opts, video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
 
-                if not os.path.exists(final_file) and os.path.exists(filename):
-                    final_file = filename
+            if not os.path.exists(final_file) and os.path.exists(filename):
+                final_file = filename
 
-                if not os.path.exists(final_file):
-                    candidates = [
-                        os.path.join(DOWNLOAD_DIR, f)
-                        for f in os.listdir(DOWNLOAD_DIR)
-                        if f.startswith(f"{task_id}_") and not f.endswith(('.temp', '.part', '.ytdl', '.db'))
-                    ]
-                    if candidates:
-                        final_file = candidates[0]
+            if not os.path.exists(final_file):
+                candidates = [
+                    os.path.join(DOWNLOAD_DIR, f)
+                    for f in os.listdir(DOWNLOAD_DIR)
+                    if f.startswith(f"{task_id}_") and not f.endswith(('.temp', '.part', '.ytdl', '.db'))
+                ]
+                if candidates:
+                    final_file = candidates[0]
 
-                if os.path.exists(final_file):
-                    set_task(task_id, 'done', {'filename': os.path.basename(final_file)})
-                else:
-                    set_task(task_id, 'error', {'error': 'Video merge process failed.'})
+            if os.path.exists(final_file):
+                set_task(task_id, 'done', {'filename': os.path.basename(final_file)})
+            else:
+                set_task(task_id, 'error', {'error': 'Video merge process failed.'})
     except Exception as e:
-        set_task(task_id, 'error', {'error': clean_ansi(str(e))})
+        err_msg = clean_ansi(str(e))
+        if "Sign in to confirm you're not a bot" in err_msg or "bot" in err_msg.lower():
+            err_msg = (
+                "YouTube bot-check triggered on server IP. "
+                "To resolve, export your YouTube cookies using the 'Get cookies.txt LOCALLY' extension, "
+                "then add them as an Environment Variable named YOUTUBE_COOKIES in your Render Dashboard."
+            )
+        set_task(task_id, 'error', {'error': err_msg})
     finally:
         if playlist_dir and os.path.exists(playlist_dir):
             shutil.rmtree(playlist_dir, ignore_errors=True)
