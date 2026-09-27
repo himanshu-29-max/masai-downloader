@@ -86,7 +86,10 @@ def get_yt_opts():
         'nocheckcertificate': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['default', '-tv']
+                # 'android_sdkless' currently returns HTTP 403 on MP4 formats
+                # (yt-dlp issue #15712) - exclude it so we fall back cleanly
+                # to the other default clients (android, web, etc.)
+                'player_client': ['default', '-android_sdkless']
             }
         },
         'http_headers': {
@@ -171,34 +174,32 @@ def task_status(task_id):
     return jsonify(task)
 
 # ==================== YOUTUBE ROUTES ====================
-@app.route('/fetch-youtube-info', methods=['POST'])
-def fetch_youtube_info():
-    data = request.get_json()
-    raw_url = data.get('url', '').strip()
-
-    if not raw_url:
-        return jsonify({'error': 'URL provide karein!'}), 400
-
-    if 'playlist?list=' in raw_url:
-        ydl_opts = get_yt_opts()
-        ydl_opts['extract_flat'] = True
-        try:
+# Pulling full format info involves YouTube's bot-check + cookies + JS
+# challenge solving, which can take longer than gunicorn's/Render's request
+# timeout. Run it in the background like the download routes so a slow
+# lookup doesn't come back as a dead connection (which shows up in the
+# browser as a JSON-parse failure, not a real error).
+def run_fetch_youtube_info(task_id, raw_url):
+    try:
+        if 'playlist?list=' in raw_url:
+            ydl_opts = get_yt_opts()
+            ydl_opts['extract_flat'] = True
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(raw_url, download=False)
-                return jsonify({
+                TASKS[task_id] = {
+                    'status': 'done',
                     'is_playlist': True,
                     'title': info.get('title', 'YouTube Playlist'),
                     'count': len(list(info.get('entries', [])))
-                })
-        except Exception as e:
-            return jsonify({'error': clean_ansi(str(e))}), 500
+                }
+            return
 
-    vid = extract_video_id(raw_url)
-    if not vid:
-        return jsonify({'error': 'Invalid YouTube URL!'}), 400
+        vid = extract_video_id(raw_url)
+        if not vid:
+            TASKS[task_id] = {'status': 'error', 'error': 'Invalid YouTube URL!'}
+            return
 
-    clean_url = f"https://www.youtube.com/watch?v={vid}"
-    try:
+        clean_url = f"https://www.youtube.com/watch?v={vid}"
         with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
             full_info = full_ydl.extract_info(clean_url, download=False)
             available_heights = set()
@@ -209,32 +210,46 @@ def fetch_youtube_info():
 
             sorted_heights = sorted(list(available_heights), reverse=True)
 
-            return jsonify({
+            TASKS[task_id] = {
+                'status': 'done',
                 'is_playlist': False,
                 'title': full_info.get('title', 'YouTube Video'),
                 'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
                 'resolutions': sorted_heights
-            })
+            }
     except Exception as e:
-        return jsonify({'error': clean_ansi(str(e))}), 500
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
 
-@app.route('/download-youtube', methods=['POST'])
-def download_youtube():
+@app.route('/fetch-youtube-info', methods=['POST'])
+def fetch_youtube_info():
     data = request.get_json()
     raw_url = data.get('url', '').strip()
-    quality = data.get('quality', 'best')
-    is_playlist = data.get('is_playlist', False)
 
     if not raw_url:
         return jsonify({'error': 'URL provide karein!'}), 400
 
-    if not is_playlist:
-        vid = extract_video_id(raw_url)
-        video_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
-    else:
-        video_url = raw_url
+    task_id = str(uuid.uuid4())[:8]
+    TASKS[task_id] = {'status': 'processing'}
 
+    t = threading.Thread(target=run_fetch_youtube_info, args=(task_id, raw_url))
+    t.daemon = True
+    t.start()
+
+    return jsonify({'status': 'started', 'task_id': task_id})
+
+# Runs on a background thread so a slow/long video doesn't hit Render's
+# ~100s request timeout - the same fix already applied to the universal
+# downloader, now applied here too since YouTube downloads were still
+# synchronous and would time out on anything but very short videos.
+def run_youtube_download(task_id, raw_url, quality, is_playlist):
+    playlist_dir = None
     try:
+        if not is_playlist:
+            vid = extract_video_id(raw_url)
+            video_url = f"https://www.youtube.com/watch?v={vid}" if vid else raw_url
+        else:
+            video_url = raw_url
+
         ydl_opts = get_yt_opts()
         ydl_opts.update({'retries': 10, 'quiet': False})
 
@@ -266,25 +281,26 @@ def download_youtube():
                 info_flat = ydl.extract_info(video_url, download=False)
                 playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
-            playlist_dir = os.path.join(DOWNLOAD_DIR, playlist_title)
+            # Prefix with task_id so two people downloading playlists with
+            # the same title at the same time don't collide on disk.
+            playlist_dir = os.path.join(DOWNLOAD_DIR, f"{task_id}_{playlist_title}")
             os.makedirs(playlist_dir, exist_ok=True)
             ydl_opts['outtmpl'] = os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s')
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
 
-            zip_filename = f"{playlist_title}.zip"
+            zip_filename = f"{task_id}_{playlist_title}.zip"
             zip_path = os.path.join(DOWNLOAD_DIR, zip_filename)
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for root, _, files in os.walk(playlist_dir):
                     for file in files:
                         zipf.write(os.path.join(root, file), file)
 
-            shutil.rmtree(playlist_dir, ignore_errors=True)
-            return jsonify({'status': 'success', 'filename': zip_filename})
+            TASKS[task_id] = {'status': 'done', 'filename': zip_filename}
 
         else:
-            ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s')
+            ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title)s.%(ext)s")
             ydl_opts['noplaylist'] = True
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -295,13 +311,46 @@ def download_youtube():
                 if not os.path.exists(final_file) and os.path.exists(filename):
                     final_file = filename
 
-                return jsonify({'status': 'success', 'filename': os.path.basename(final_file)})
+                if os.path.exists(final_file):
+                    TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
+                else:
+                    TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        return jsonify({'error': clean_ansi(str(e))}), 500
+        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
+    finally:
+        # Always clean up the per-playlist working folder, even if the
+        # download failed partway through - previously a failed playlist
+        # download left partial files behind on disk forever.
+        if playlist_dir and os.path.exists(playlist_dir):
+            shutil.rmtree(playlist_dir, ignore_errors=True)
+
+@app.route('/download-youtube', methods=['POST'])
+def download_youtube():
+    data = request.get_json()
+    raw_url = data.get('url', '').strip()
+    quality = data.get('quality', 'best')
+    is_playlist = data.get('is_playlist', False)
+
+    if not raw_url:
+        return jsonify({'error': 'URL provide karein!'}), 400
+
+    task_id = str(uuid.uuid4())[:8]
+    TASKS[task_id] = {'status': 'processing'}
+
+    t = threading.Thread(target=run_youtube_download, args=(task_id, raw_url, quality, is_playlist))
+    t.daemon = True
+    t.start()
+
+    return jsonify({'status': 'started', 'task_id': task_id})
 
 @app.route('/get-file/<path:filename>')
 def get_file(filename):
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
+    # Strip any directory components so a filename like "../../etc/passwd"
+    # can't be used to escape DOWNLOAD_DIR (path traversal).
+    safe_name = os.path.basename(filename)
+    file_path = os.path.realpath(os.path.join(DOWNLOAD_DIR, safe_name))
+    if not file_path.startswith(os.path.realpath(DOWNLOAD_DIR) + os.sep):
+        return "Invalid filename", 400
     if os.path.exists(file_path):
         @after_this_request
         def remove_file(response):
@@ -314,4 +363,8 @@ def get_file(filename):
     return "File not found", 404
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Never run with the Werkzeug debugger enabled in production - it lets
+    # anyone who can reach an error page execute arbitrary code. Only turn
+    # it on locally by explicitly setting FLASK_DEBUG=1.
+    debug_mode = os.environ.get('FLASK_DEBUG') == '1'
+    app.run(debug=debug_mode, port=int(os.environ.get('PORT', 5000)), threaded=True)
