@@ -1,6 +1,7 @@
 cookies.txt
 youtube_cookies.txt
 downloads/
+ffmpeg-bin/
 __pycache__/
 *.pyc
 *.db

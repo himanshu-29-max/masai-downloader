@@ -20,14 +20,27 @@ RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
 LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
 WRITABLE_COOKIE = '/tmp/cookies.txt'
 
-MASAI_COOKIE = None
-if os.path.exists(RENDER_SECRET_COOKIE):
+def _cookie_from_env(env_name, writable_path):
+    """Render par secret file lagana kabhi-kabhi fail hota hai; env var me
+    Netscape cookie content diya ho to use writable file me likh do."""
+    content = os.environ.get(env_name, '').strip()
+    if not content or '# Netscape' not in content and '\t' not in content:
+        return None
+    try:
+        with open(writable_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return writable_path
+    except Exception:
+        return None
+
+MASAI_COOKIE = _cookie_from_env('MASAI_COOKIES', WRITABLE_COOKIE)
+if MASAI_COOKIE is None and os.path.exists(RENDER_SECRET_COOKIE):
     try:
         shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
         MASAI_COOKIE = WRITABLE_COOKIE
     except Exception:
         MASAI_COOKIE = RENDER_SECRET_COOKIE
-elif os.path.exists(LOCAL_COOKIE):
+elif MASAI_COOKIE is None and os.path.exists(LOCAL_COOKIE):
     MASAI_COOKIE = LOCAL_COOKIE
 
 # Cookie Setup (YouTube ke liye - bot-check bypass)
@@ -35,20 +48,57 @@ RENDER_SECRET_YT_COOKIE = '/etc/secrets/youtube_cookies.txt'
 LOCAL_YT_COOKIE = os.path.join(BASE_DIR, 'youtube_cookies.txt')
 WRITABLE_YT_COOKIE = '/tmp/youtube_cookies.txt'
 
-YOUTUBE_COOKIE = None
-if os.path.exists(RENDER_SECRET_YT_COOKIE):
+YOUTUBE_COOKIE = _cookie_from_env('YOUTUBE_COOKIES', WRITABLE_YT_COOKIE)
+if YOUTUBE_COOKIE is None and os.path.exists(RENDER_SECRET_YT_COOKIE):
     try:
         shutil.copyfile(RENDER_SECRET_YT_COOKIE, WRITABLE_YT_COOKIE)
         YOUTUBE_COOKIE = WRITABLE_YT_COOKIE
     except Exception:
         YOUTUBE_COOKIE = RENDER_SECRET_YT_COOKIE
-elif os.path.exists(LOCAL_YT_COOKIE):
+elif YOUTUBE_COOKIE is None and os.path.exists(LOCAL_YT_COOKIE):
     YOUTUBE_COOKIE = LOCAL_YT_COOKIE
 
-# FFmpeg setup
-ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-ffmpeg_dir = os.path.dirname(ffmpeg_exe)
-os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+# ==================== FFmpeg setup (v1.1 FIX - ASLI BUG) ====================
+# PURANA CODE SIRF DIRECTORY KO PATH ME DAALTA THA. Lekin imageio-ffmpeg ki
+# binary ka naam 'ffmpeg' NAHI hota - woh kuch aisa hota hai:
+#   ffmpeg-linux-x86_64-v7.0.2  /  ffmpeg-win-x86_64-v7.0.2.exe
+# yt-dlp PATH me exact naam 'ffmpeg' dhundhta hai, isliye Render par (jahan
+# system ffmpeg hota hi nahi) use ffmpeg MILTA HI NAHI THA aur har merge
+# fail hota tha:
+#   "ERROR: You have requested merging of multiple formats but ffmpeg is
+#    not installed. Aborting due to --abort-on-error"
+# Matlab: YouTube ka har Best/quality download aur MP3 conversion fail,
+# aur kuch Masai/HLS downloads bhi. Local Windows par system ffmpeg hone
+# se ye bug chhup jata tha.
+#
+# FIX (do hisson me):
+# 1) Har yt-dlp call me 'ffmpeg_location': FFMPEG_EXE seedha pass karo
+#    (get_yt_opts + universal opts me added hai) - yt-dlp ko PATH par
+#    nirbhar hi nahi rehna padta.
+# 2) Belt-and-braces: ek folder me binary ko 'ffmpeg' naam se symlink/copy
+#    karke PATH me sabse aage rakho, taaki post-processors ko bhi mil jaye.
+FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+ffmpeg_exe = FFMPEG_EXE  # purana naam, koi aur jagah use ho to na toote
+
+FFMPEG_BIN_DIR = os.path.join(BASE_DIR, 'ffmpeg-bin')
+try:
+    os.makedirs(FFMPEG_BIN_DIR, exist_ok=True)
+    _ffmpeg_named = os.path.join(
+        FFMPEG_BIN_DIR, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+    if not os.path.exists(_ffmpeg_named):
+        try:
+            os.symlink(FFMPEG_EXE, _ffmpeg_named)
+        except Exception:
+            shutil.copyfile(FFMPEG_EXE, _ffmpeg_named)
+    try:
+        os.chmod(_ffmpeg_named, 0o755)
+    except Exception:
+        pass
+    os.environ["PATH"] = FFMPEG_BIN_DIR + os.pathsep + os.environ.get("PATH", "")
+except Exception:
+    # Symlink/copy fail ho jaye (Windows permissions aadi) to bhi
+    # ffmpeg_location wala fix akela kaafi hai - app ko crash mat karo.
+    pass
 
 TASKS = {}
 
@@ -84,6 +134,7 @@ def get_yt_opts():
         'no_warnings': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
+        'ffmpeg_location': FFMPEG_EXE,
         'extractor_args': {
             'youtube': {
                 # YouTube's 2025-2026 SABR rollout strips playable formats
@@ -111,6 +162,22 @@ def get_yt_opts():
 def home():
     return render_template('index.html')
 
+@app.route('/health')
+def health():
+    """Deploy ke baad browser me /health kholo - bina logs khode pata chal
+    jayega ki ffmpeg mil raha hai ya nahi aur cookies lagi hain ya nahi.
+    Sirf True/False batata hai, cookie ka content kabhi nahi."""
+    import shutil as _sh
+    return jsonify({
+        'ok': True,
+        'ffmpeg_exe': FFMPEG_EXE,
+        'ffmpeg_exists': os.path.exists(FFMPEG_EXE),
+        'ffmpeg_on_path': _sh.which('ffmpeg'),
+        'yt_dlp_version': yt_dlp.version.__version__,
+        'masai_cookie_present': bool(MASAI_COOKIE and os.path.exists(MASAI_COOKIE)),
+        'youtube_cookie_present': bool(YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE)),
+    })
+
 # ==================== UNIVERSAL / M3U8 DOWNLOAD ====================
 def run_universal_download(task_id, video_url):
     try:
@@ -121,6 +188,7 @@ def run_universal_download(task_id, video_url):
             'format': 'bestvideo+bestaudio/best',
             'outtmpl': os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title).100s.%(ext)s"),
             'merge_output_format': 'mp4',
+            'ffmpeg_location': FFMPEG_EXE,
             'socket_timeout': 30,
             'retries': 15,
             'fragment_retries': 15,
