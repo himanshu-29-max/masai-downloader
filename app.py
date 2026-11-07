@@ -205,8 +205,19 @@ def extract_video_id(url):
             return m.group(1)
     return None
 
-def get_yt_opts():
-    """Bypasses YouTube bot-check using cookies (when available) + working player_client combo"""
+def get_yt_opts(player_client=None):
+    """YouTube ke liye yt-dlp options. player_client diya ho to wahi set
+    use hota hai, warna default combo."""
+    if player_client is None:
+        # YouTube's 2025-2026 SABR rollout strips playable formats
+        # from the plain 'web' clients unless a PO (Proof-of-Origin)
+        # token is supplied - which this app doesn't generate. 'tv',
+        # 'tv_embedded' and 'android_vr' are, for now, less affected
+        # and often still return real formats without one.
+        # 'android_sdkless' stays excluded (yt-dlp #15712, HTTP 403
+        # on MP4 formats). This list is a moving target - YouTube
+        # changes which clients work every few weeks.
+        player_client = ['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless']
     opts = {
         'quiet': True,
         'no_warnings': True,
@@ -215,15 +226,7 @@ def get_yt_opts():
         'ffmpeg_location': FFMPEG_EXE,
         'extractor_args': {
             'youtube': {
-                # YouTube's 2025-2026 SABR rollout strips playable formats
-                # from the plain 'web' clients unless a PO (Proof-of-Origin)
-                # token is supplied - which this app doesn't generate. 'tv',
-                # 'tv_embedded' and 'android_vr' are, for now, less affected
-                # and often still return real formats without one.
-                # 'android_sdkless' stays excluded (yt-dlp #15712, HTTP 403
-                # on MP4 formats). This list is a moving target - YouTube
-                # changes which clients work every few weeks.
-                'player_client': ['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless']
+                'player_client': player_client
             }
         },
         'http_headers': {
@@ -235,6 +238,87 @@ def get_yt_opts():
     if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
         opts['cookiefile'] = YOUTUBE_COOKIE
     return opts
+
+# ==================== v1.3: CLIENT FALLBACK + SAHULIYAT WALE ERROR ====================
+# Render ki IP par YouTube aksar pehle client set ko jawab hi nahi deta
+# ("Failed to extract any player response") jabki dusra set chal jata hai.
+# Isliye ab ek ke baad ek kai client sets try hote hain:
+#   1) Cookies lagi hon to pehle WEB clients (cookies inhi ke saath sabse
+#      achhi chalti hain; TV clients cookies ko thik se istemal nahi karte)
+#   2) TV combo (bina cookies ke abhi tak ka sabse bharosemand)
+#   3) visionos + android
+def yt_client_sets():
+    sets = []
+    if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
+        sets.append(['default', 'web', 'web_safari', 'mweb'])
+    sets.append(['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless'])
+    sets.append(['visionos', 'android'])
+    unique = []
+    for s in sets:
+        if s not in unique:
+            unique.append(s)
+    return unique
+
+# In shabdon wale error par dusra client set try karna faydemand hai.
+# Baaki errors (jaise ffmpeg merge fail) par dobara try sirf samay kharab karega.
+_FALLBACK_HINTS = ('player response', 'sign in to confirm', 'not a bot',
+                   'video unavailable', 'this video is unavailable',
+                   'requested format is not available', 'http error 403',
+                   'login required', 'private video', 'age')
+
+def _should_fallback(err):
+    msg = str(err).lower()
+    return any(h in msg for h in _FALLBACK_HINTS)
+
+def extract_with_fallback(url, download=False, extra_opts=None):
+    """Client sets ek-ek karke try karta hai. Safal ho to (info, filename)
+    lautata hai; sab fail ho jayein to aakhri error uthata hai.
+    Download ke case me bhi yahi istemal hota hai - merge jaisi gair-
+    extraction galtiyon par fallback nahi hota."""
+    last_err = None
+    for clients in yt_client_sets():
+        opts = get_yt_opts(clients)
+        if extra_opts:
+            opts.update(extra_opts)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=download)
+                filename = ydl.prepare_filename(info) if download else None
+                return info, filename
+        except Exception as e:
+            last_err = e
+            if download and not _should_fallback(e):
+                raise
+            continue
+    if last_err:
+        raise last_err
+    raise Exception('YouTube se koi jawab nahi aaya.')
+
+def friendly_error(e):
+    """yt-dlp ki kachchi English error ko aisi bhasha me badlo jisse asli
+    wajah aur ilaaj turant samajh aaye. Asli error aakhir me rehta hai."""
+    raw = clean_ansi(str(e))
+    low = raw.lower()
+    if 'failed to extract any player response' in low or \
+       'sign in to confirm' in low or 'not a bot' in low:
+        return ('YouTube ne is server (Render) ki request ko bot samajh kar rok diya. '
+                'Ye aksar server ki IP ki wajah se hota hai. Ilaaj: Render me apne YouTube '
+                'login ki cookies lagao (Secret File: youtube_cookies.txt) — uske baad '
+                'request tumhare account se jayegi aur ye rukawat hatt jayegi. '
+                f'(Asli error: {raw[:200]})')
+    if 'this video is unavailable' in low or 'video unavailable' in low or \
+       'private video' in low or 'login required' in low:
+        return ('Ye video YouTube par is samay uplabdh nahi hai — woh private ho sakta hai, '
+                'delete ho sakta hai, ya sirf kisi khaas account ke liye khulta ho. '
+                'Agar video tumhare apne YouTube account se browser me chalta hai, to usi '
+                'account ki cookies Render me lagane se hi download hoga '
+                '(Secret File: youtube_cookies.txt). '
+                f'(Asli error: {raw[:200]})')
+    if 'http error 403' in low or '403 forbidden' in low:
+        return ('Server ko video tak pahunchne se rok diya gaya (403). Cookies expire '
+                'ho gayi hongi ya lagi hi nahi hain — fresh cookies lagakar dobara try karo. '
+                f'(Asli error: {raw[:200]})')
+    return raw
 
 @app.route('/')
 def home():
@@ -299,7 +383,16 @@ def run_universal_download(task_id, video_url):
             else:
                 TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
+        err_text = clean_ansi(str(e))
+        # Masai ke streams par 403 ka matlab lagbhag hamesha: cookies.txt
+        # (Render Secret File) expire ho gayi ya lagi hi nahi hai.
+        if 'masaischool.com' in video_url and ('403' in err_text or 'Forbidden' in err_text):
+            err_text = ('Masai ne download rok diya (403) — lagbhag pakka hai ki Render me '
+                        'lagi cookies.txt expire ho gayi hai ya lagi hi nahi hai. Fresh '
+                        'cookies lagao: apne browser se students.masaischool.com ki cookies '
+                        'export karke Render ki Secret File (cookies.txt) update karo. '
+                        f'(Asli error: {err_text[:200]})')
+        TASKS[task_id] = {'status': 'error', 'error': err_text}
 
 @app.route('/download-universal', methods=['POST'])
 def download_universal():
@@ -335,16 +428,14 @@ def task_status(task_id):
 def run_fetch_youtube_info(task_id, raw_url):
     try:
         if 'playlist?list=' in raw_url:
-            ydl_opts = get_yt_opts()
-            ydl_opts['extract_flat'] = True
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(raw_url, download=False)
-                TASKS[task_id] = {
-                    'status': 'done',
-                    'is_playlist': True,
-                    'title': info.get('title', 'YouTube Playlist'),
-                    'count': len(list(info.get('entries', [])))
-                }
+            info, _ = extract_with_fallback(raw_url, download=False,
+                                            extra_opts={'extract_flat': True})
+            TASKS[task_id] = {
+                'status': 'done',
+                'is_playlist': True,
+                'title': info.get('title', 'YouTube Playlist'),
+                'count': len(list(info.get('entries', [])))
+            }
             return
 
         vid = extract_video_id(raw_url)
@@ -353,25 +444,24 @@ def run_fetch_youtube_info(task_id, raw_url):
             return
 
         clean_url = f"https://www.youtube.com/watch?v={vid}"
-        with yt_dlp.YoutubeDL(get_yt_opts()) as full_ydl:
-            full_info = full_ydl.extract_info(clean_url, download=False)
-            available_heights = set()
-            for f in full_info.get('formats', []):
-                h = f.get('height')
-                if h and f.get('vcodec') != 'none':
-                    available_heights.add(h)
+        full_info, _ = extract_with_fallback(clean_url, download=False)
+        available_heights = set()
+        for f in full_info.get('formats', []):
+            h = f.get('height')
+            if h and f.get('vcodec') != 'none':
+                available_heights.add(h)
 
-            sorted_heights = sorted(list(available_heights), reverse=True)
+        sorted_heights = sorted(list(available_heights), reverse=True)
 
-            TASKS[task_id] = {
-                'status': 'done',
-                'is_playlist': False,
-                'title': full_info.get('title', 'YouTube Video'),
-                'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
-                'resolutions': sorted_heights
-            }
+        TASKS[task_id] = {
+            'status': 'done',
+            'is_playlist': False,
+            'title': full_info.get('title', 'YouTube Video'),
+            'thumbnail': full_info.get('thumbnail', f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg'),
+            'resolutions': sorted_heights
+        }
     except Exception as e:
-        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
+        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e)}
 
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
@@ -403,11 +493,11 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
         else:
             video_url = raw_url
 
-        ydl_opts = get_yt_opts()
-        ydl_opts.update({'retries': 10, 'quiet': False})
-
+        # Quality ke hisaab se format/postprocessor - client set se alag
+        # rakha hai taaki fallback me har set ke saath yahi istemal ho.
+        fmt_opts = {'retries': 10, 'quiet': False}
         if quality == 'mp3':
-            ydl_opts.update({
+            fmt_opts.update({
                 'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
@@ -417,31 +507,52 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
             })
             target_ext = 'mp3'
         elif quality == 'best':
-            ydl_opts.update({
+            fmt_opts.update({
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'merge_output_format': 'mp4'
             })
             target_ext = 'mp4'
         else:
-            ydl_opts.update({
+            fmt_opts.update({
                 'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best',
                 'merge_output_format': 'mp4'
             })
             target_ext = 'mp4'
 
         if is_playlist:
-            with yt_dlp.YoutubeDL(dict(get_yt_opts(), extract_flat=True)) as ydl:
-                info_flat = ydl.extract_info(video_url, download=False)
-                playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
+            info_flat, _ = extract_with_fallback(video_url, download=False,
+                                                 extra_opts={'extract_flat': True})
+            playlist_title = re.sub(r'[\\/*?:"<>|]', "", info_flat.get('title', 'YouTube_Playlist'))
 
             # Prefix with task_id so two people downloading playlists with
             # the same title at the same time don't collide on disk.
             playlist_dir = os.path.join(DOWNLOAD_DIR, f"{task_id}_{playlist_title}")
             os.makedirs(playlist_dir, exist_ok=True)
-            ydl_opts['outtmpl'] = os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s')
+            fmt_opts['outtmpl'] = os.path.join(playlist_dir, '%(autonumber)02d - %(title)s.%(ext)s')
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
+            # Har client set ek baar try karo; aadha-adhura download agle
+            # set se pehle saaf kar do taaki ZIP me kachra na jaye.
+            last_err = None
+            downloaded = False
+            for clients in yt_client_sets():
+                dl_opts = get_yt_opts(clients)
+                dl_opts.update(fmt_opts)
+                try:
+                    with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                        ydl.download([video_url])
+                    downloaded = True
+                    break
+                except Exception as e:
+                    last_err = e
+                    if not _should_fallback(e):
+                        raise
+                    for f in os.listdir(playlist_dir):
+                        try:
+                            os.remove(os.path.join(playlist_dir, f))
+                        except Exception:
+                            pass
+            if not downloaded:
+                raise last_err if last_err else Exception('Playlist download fail ho gaya.')
 
             zip_filename = f"{task_id}_{playlist_title}.zip"
             zip_path = os.path.join(DOWNLOAD_DIR, zip_filename)
@@ -453,23 +564,22 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
             TASKS[task_id] = {'status': 'done', 'filename': zip_filename}
 
         else:
-            ydl_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title)s.%(ext)s")
-            ydl_opts['noplaylist'] = True
+            fmt_opts['outtmpl'] = os.path.join(DOWNLOAD_DIR, f"{task_id}_%(title)s.%(ext)s")
+            fmt_opts['noplaylist'] = True
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                filename = ydl.prepare_filename(info)
-                final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
+            info, filename = extract_with_fallback(video_url, download=True,
+                                                   extra_opts=fmt_opts)
+            final_file = os.path.splitext(filename)[0] + f'.{target_ext}'
 
-                if not os.path.exists(final_file) and os.path.exists(filename):
-                    final_file = filename
+            if not os.path.exists(final_file) and os.path.exists(filename):
+                final_file = filename
 
-                if os.path.exists(final_file):
-                    TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
-                else:
-                    TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
+            if os.path.exists(final_file):
+                TASKS[task_id] = {'status': 'done', 'filename': os.path.basename(final_file)}
+            else:
+                TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        TASKS[task_id] = {'status': 'error', 'error': clean_ansi(str(e))}
+        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e)}
     finally:
         # Always clean up the per-playlist working folder, even if the
         # download failed partway through - previously a failed playlist

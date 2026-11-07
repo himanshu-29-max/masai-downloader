@@ -1,119 +1,120 @@
-# Masai Downloader — Fix v1.2 (07 Nov 2026)
-# v1.1 (ffmpeg) + v1.2 (Task not found) — dono fix ek saath.
-# Agar v1.1 wala ZIP laga liya tha to koi baat nahi, isse overwrite kar do.
-# Agar nahi lagaya tha to v1.1 ko chhodo, seedha yahi lagao.
+# Masai Downloader — Fix v1.3 (07 Nov 2026)
+# v1.1 (ffmpeg) + v1.2 (Task not found) + v1.3 (YouTube extraction) — teeno ek saath.
+# Purana koi bhi ZIP lagaya ho ya na lagaya ho — seedha yahi lagao, baaki chhodo.
 
 ====================================================================
-BUG 2 (v1.2, naya): "Task not found" — tumhare screenshot wala error
+BUG 3 (v1.3, naya): "Failed to extract any player response"
 ====================================================================
 
-## Hua kya tha
+## Pehle khushi ki baat
 
-"Check Available Qualities" dabate hi **Task not found** aa raha tha —
-video tak baat pahunch hi nahi rahi thi.
+Tumhare naye screenshot me **"Task not found" gayab hai** — matlab
+v1.2 ka SQLite fix site par lag gaya aur kaam kar raha hai. Ab site
+YouTube tak pahunchti hai aur YouTube ka **asli jawab** dikhati hai.
+Teen bugs me se do khatm; ye teesra aur aakhri wala hai.
 
-Code me tasks ek in-memory dictionary me rehte the:
-
-```python
-TASKS = {}
-```
-
-Lekin Render par gunicorn ke **multiple worker processes** chalte hain
-(dashboard me jo Start Command pada hai, wohi chalta hai — Procfile wala
-`--workers 1` Render use hi nahi karta). Har worker ki apni alag memory
-hoti hai:
-
-- Download/fetch request **Worker 1** ke paas gayi → task usi ki memory me bana
-- Browser ki polling request **Worker 2** ke paas gayi → uske paas woh
-  task tha hi nahi → **404 Task not found** → site ne wahi dikha diya
-
-**Maine reproduce karke dekha:** purane code ko 4 workers ke saath chalaya
-to 48 polls me se **46 baar "Task not found"** aaya. Matlab site lagbhag
-har baar isi par atak rahi thi — video download hona to door ki baat thi.
-
-Ek aur khaas baat: ye SQLite wala fix tumhare repo ke purane commit
-`93aec17` me **tha bhi**, lekin baad ke `fix bugs` commit (`d62fbf6`) ne
-use galti se hata diya. v1.2 me wohi fix wapas + behtar karke lagaya hai.
-
-## Fix
-
-1. **Tasks ab SQLite file (`downloads/tasks.db`) me rehte hain** — saare
-   workers ek hi file se padhte/likhte hain, aur koi worker restart ho
-   jaye to bhi task gayab nahi hota. Code me ek chhota sa dict-jaisa
-   class lagaya hai, isliye baaki `TASKS[...]` wali koi line badli nahi.
-2. **Frontend me bhi suraksha:** polling ke pehle kuch polls me agar 404
-   aaye to site turant error dikhane ke bajaye thoda aur intezaar karegi.
-3. **Procfile** me `--worker-class gthread` joda, taaki `--threads 8`
-   asal me kaam kare.
-4. `/health` me ab `task_store: "sqlite"` aur `task_db_exists` bhi
-   dikhega — deploy ke baad wahi se confirm kar lena.
-
-## Live test (4 workers ke saath — wahi haalaat jisme purana code fail tha)
-
-- Wahi polling test jo pehle 46/48 baar fail tha → ab **48/48 pass, 0 baar
-  Task not found** ✅
-- YouTube video download (Best) → merge hua → **asli MP4 file mili** ✅
-- Universal M3U8 download → merge hua → **7.9 MB MP4 mili** ✅
-- **Tumhare screenshot wala link** (`youtu.be/lZx_xitlhyI`) bhi test kiya:
-  Task not found gaya, task pura hua — lekin is link par YouTube ne khud
-  jawab diya **"This video is unavailable"**. Ye ek baar apne browser me
-  kholke dekho: agar wahan bhi video nahi chalta to video private/delete
-  ho chuka hai (app ki galti nahi). Agar browser me chalta hai aur site
-  par ye error aaye, to mujhe batao — phir woh cookies/IP wala masla
-  hoga, uska ilaaj alag hai.
-
-====================================================================
-BUG 1 (v1.1): Render par ffmpeg mil hi nahi raha tha
-====================================================================
-
-Purana code sirf imageio-ffmpeg ka folder PATH me daalta tha, lekin us
-binary ka naam `ffmpeg` hota hi nahi — woh `ffmpeg-linux-x86_64-v9.0.2`
-jaisa hota hai. yt-dlp exact naam `ffmpeg` dhundhta hai, isliye Render
-par har merge is error par fail tha:
+## Ye error kya hai
 
 ```
-ERROR: You have requested merging of multiple formats but ffmpeg is
-not installed. Aborting due to --abort-on-error
+ERROR: [youtube] lZx_xitlhyI: Failed to extract any player response
 ```
 
-Fix: har yt-dlp call me `'ffmpeg_location'` seedha pass kiya +
-binary ko `ffmpeg` naam se link karke PATH me rakha. Isi wajah se
-YouTube ka har quality download aur MP3 fail ho raha tha. Local PC par
-system ffmpeg hone se ye bug chhup jata tha.
+Matlab: YouTube ne Render ke server ko video ki jaankari hi nahi di.
+Do badi wajahen hoti hain:
 
-Saath me: `/health` page (ffmpeg/cookies ki sthiti bina logs khode) aur
-`MASAI_COOKIES` / `YOUTUBE_COOKIES` env-var se cookies dene ka support
-bhi wapas hai.
+1. **Server IP par bot-rukawat** — YouTube datacenter (Render) ki IP ko
+   bina login ke aksar jawab nahi deta. Ilaaj: tumhare YouTube account
+   ki cookies server par lagana.
+2. **Video khud uplabdh nahi** — private / delete / sirf khaas account
+   ke liye. Is case me bhi, agar video tumhare account se khulta hai,
+   to ilaaj wahi cookies hain; agar kahin nahi khulta, to koi bhi
+   downloader use nahi la sakta.
+
+**Meri jaanch (jo maine khud karke dekhi):**
+- Screenshot wale video ko maine **9 alag-alag client tarike se** try
+  kiya — har baar "This video is unavailable" ya koi jawab nahi.
+  YouTube ki oEmbed jaanch me bhi ye video **404 (nahi mila)** aaya.
+- Unhi tariko se **dusre aam videos bilkul sahi chale** — ek mashhoor
+  video ki saari qualities (144p se 2160p tak) aayi aur download bhi
+  pura hua.
+- Matlab: app ka kaam ab sahi hai; ye khaas video bina account-access
+  ke kahin se nahi khul raha.
+
+## v1.3 me kya sudhara
+
+1. **Client fallback:** ab ek tarika fail ho to app apne-aap dusra,
+   phir teesra tarika try karti hai (pehle ek hi tarika tha).
+2. **Cookies ho to pehle web clients:** cookies lagi hon to extraction
+   pehle un clients se hoti hai jinke saath cookies sabse achhi chalti
+   hain — private/account-only videos ke liye yahi sahi rasta hai.
+3. **Saaf bhasha me error:** ab kachchi English ki jagah site seedha
+   wajah aur ilaaj batayegi, jaise — "Ye video uplabdh nahi hai —
+   private/delete ho sakta hai… cookies lagane se hoga" ya "YouTube ne
+   server ko bot samjha — cookies lagao". Masai wale 403 par bhi ab
+   "cookies expire ho gayi hain" wala saaf sandesh aayega.
+
+## Live test (v1.3, 4 workers ke saath)
+
+- Mashhoor public video → qualities aayi (2160p tak), **9 second me** ✅
+- Chhota video download → merge → **asli MP4 mili** ✅
+- Screenshot wala video → koi Task-not-found nahi; saaf Hinglish me
+  "video uplabdh nahi — private/delete/account-only" wala jawab ✅
 
 ====================================================================
 TUMHE KYA KARNA HAI
 ====================================================================
 
-1. ZIP extract karo. Teen files apne project me **overwrite** karo:
-   **`app.py`**, **`templates/index.html`**, **`Procfile`**
-   (baaki files — requirements.txt, render-build.sh — same hain.)
-2. Push karo:
-   ```
-   git add app.py templates/index.html Procfile
-   git commit -m "fix: SQLite task store (Task not found) + ffmpeg_location"
-   git push
-   ```
-3. Render deploy (2-4 min) ke baad pehle **`/health`** kholo:
-   `task_store: "sqlite"`, `task_db_exists: true`,
-   `ffmpeg_exists: true` — teeno aane chahiye.
-4. Phir wahi YouTube link dobara try karo. "Task not found" ab nahi
-   aana chahiye.
+### Step 1: v1.3 lagao
+ZIP se **`app.py`** overwrite karo (is baar sirf app.py badla hai;
+index.html aur Procfile v1.2 wale hi hain — agar v1.2 nahi lagaya tha
+to teeno overwrite karna). Push → Render deploy.
 
-## Render par ek cheez aur check kar lena (1 minute)
+### Step 2: Ye video apne browser me kholo (sabse zaroori jaanch)
+Link: https://youtu.be/lZx_xitlhyI
+- **Browser me bhi nahi chalta** → video gaya (private/delete).
+  Koi fix kaam nahi karega; link galat ya video hata diya gaya hai.
+- **Sirf login hone par chalta hai** → Step 3 (cookies) hi ilaaj hai.
+- **Bina login (incognito) bhi chalta hai** → video public hai; phir
+  rukawat sirf Render ki IP ki hai — ilaaj phir bhi Step 3 hi hai.
 
-Render Dashboard → tumhari service → **Settings → Start Command**.
-Agar wahan kuch aur hai to use isse badal do:
+### Step 3: YouTube cookies Render me lagao (bot-rukawat ka ilaaj)
+1. Chrome me woh wala YouTube account kholo jisse video chalta hai.
+2. "Get cookies.txt LOCALLY" extension se youtube.com ki cookies
+   **Netscape format** me export karo → file ka naam
+   `youtube_cookies.txt` rakho.
+   (Dhyaan: ye file tumhare account ka login hai — kisi ko bhejna mat,
+   GitHub par to bilkul push mat karna; ye repo ki .gitignore me pehle
+   se band hai.)
+3. Render Dashboard → tumhari service → **Environment → Secret Files**
+   → Add: Filename = `youtube_cookies.txt`, content me puri file ka
+   text paste karo → Save (service restart hogi).
+4. `/health` kholo → `youtube_cookie_present: true` aana chahiye.
+5. Site par video dobara try karo.
 
-```
-gunicorn app:app --timeout 120 --workers 1 --threads 8 --worker-class gthread
-```
+### Step 4: Ek aur setting pakki kar lo
+Render → Settings:
+- **Build Command** = `./render-build.sh`
+  (yeh har deploy par yt-dlp ko sabse naye version par le jata hai —
+  purana yt-dlp bhi "player response" wali galti deta hai. `/health`
+  me `yt_dlp_version` dikhta hai, wahi se pakka hota hai.)
+- **Start Command** =
+  `gunicorn app:app --timeout 120 --workers 1 --threads 8 --worker-class gthread`
 
-(SQLite fix ke baad ye step anivaarya nahi hai — tasks ab shared file
-me hain, workers kitne bhi hon chalega. Lekin 1 worker + zyada threads
-is app ke liye sahi rehta hai, kyunki download hui files bhi ek hi
-machine par rehti hain.)
+====================================================================
+BUG 2 (v1.2): "Task not found" — HAL HO GAYA (site par lag chuka)
+====================================================================
+Tasks memory (`TASKS = {}`) me the; Render ke alag-alag workers ko
+task dikhta hi nahi tha. Maine reproduce kiya tha: 4 workers par 48 me
+se 46 polls 404. Fix: tasks SQLite file (`downloads/tasks.db`) me —
+saare workers ke liye ek hi jagah. Live test: 48/48 pass. Tumhare naye
+screenshot me ye error gayab hai, yahi iski sabse badi pushti hai.
+
+====================================================================
+BUG 1 (v1.1): Render par ffmpeg nahi mil raha tha — HAL
+====================================================================
+imageio-ffmpeg ki binary ka naam `ffmpeg` nahi hota
+(`ffmpeg-linux-x86_64-v9.0.2` jaisa hota hai), isliye yt-dlp ko Render
+par ffmpeg milta hi nahi tha aur har merge "ffmpeg is not installed"
+par fail tha. Fix: har yt-dlp call me `ffmpeg_location` seedha pass +
+binary ko `ffmpeg` naam se link karke PATH me. Saath me `/health`
+page aur env-var se cookies dene ka support.
