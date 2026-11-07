@@ -4,6 +4,9 @@ import uuid
 import shutil
 import zipfile
 import threading
+import sqlite3
+import json
+import time
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import yt_dlp
@@ -100,7 +103,82 @@ except Exception:
     # ffmpeg_location wala fix akela kaafi hai - app ko crash mat karo.
     pass
 
-TASKS = {}
+# ==================== TASK STORE (v1.2 FIX - "Task not found") ====================
+# PURANI GALTI: TASKS = {} ek in-memory dictionary thi. Render par gunicorn
+# ke MULTIPLE worker processes chalte hain (dashboard ka Start Command
+# Procfile wala --workers 1 use hi nahi karta) aur har worker ki apni alag
+# memory hoti hai. Download request jis worker ke paas gayi, task usi ki
+# memory me bana; browser ki agli polling request dusre worker ke paas
+# gayi -> uske paas task tha hi nahi -> "Task not found". Reproduce karke
+# dekha: 4 workers par 48 polls me se 46 baar 404 aaya.
+# (Ye SQLite wala fix repo ke ek purane commit 93aec17 me tha bhi, lekin
+# baad ke 'fix bugs' commit d62fbf6 ne use galti se hata diya tha.)
+#
+# FIX: Tasks ab SQLite file (downloads/tasks.db) me rehte hain - saare
+# workers ek hi file padhte/likhte hain, aur worker restart ho jaye to
+# bhi task gayab nahi hota. Neeche wala class bilkul dict jaisa behave
+# karta hai, isliye baaki poore code me TASKS[...] wali ek bhi line
+# badalni nahi padi.
+DB_PATH = os.path.join(DOWNLOAD_DIR, 'tasks.db')
+
+def _init_task_db():
+    try:
+        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY,
+                    data TEXT,
+                    updated_at REAL
+                )
+            ''')
+    except Exception as e:
+        print("Task DB init error:", e)
+
+_init_task_db()
+
+class _TaskStore:
+    """Dict-jaisa interface, peeche SQLite. Har operation fresh connection
+    kholta hai - threads aur processes dono ke liye safe hai."""
+
+    def __setitem__(self, task_id, value):
+        try:
+            with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
+                conn.execute('PRAGMA journal_mode=WAL;')
+                conn.execute('''
+                    INSERT INTO tasks (task_id, data, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        data=excluded.data, updated_at=excluded.updated_at
+                ''', (task_id, json.dumps(value), time.time()))
+                # 2 ghante se purane tasks saaf karte raho, file badhti na rahe
+                conn.execute('DELETE FROM tasks WHERE updated_at < ?',
+                             (time.time() - 7200,))
+        except Exception as e:
+            print(f"Task store write error ({task_id}):", e)
+
+    def get(self, task_id, default=None):
+        try:
+            with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
+                cur = conn.execute(
+                    'SELECT data FROM tasks WHERE task_id = ?', (task_id,))
+                row = cur.fetchone()
+                if row:
+                    return json.loads(row[0])
+        except Exception as e:
+            print(f"Task store read error ({task_id}):", e)
+        return default
+
+    def __getitem__(self, task_id):
+        value = self.get(task_id)
+        if value is None:
+            raise KeyError(task_id)
+        return value
+
+    def __contains__(self, task_id):
+        return self.get(task_id) is not None
+
+TASKS = _TaskStore()
 
 def clean_ansi(text):
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
@@ -176,6 +254,8 @@ def health():
         'yt_dlp_version': yt_dlp.version.__version__,
         'masai_cookie_present': bool(MASAI_COOKIE and os.path.exists(MASAI_COOKIE)),
         'youtube_cookie_present': bool(YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE)),
+        'task_store': 'sqlite',
+        'task_db_exists': os.path.exists(DB_PATH),
     })
 
 # ==================== UNIVERSAL / M3U8 DOWNLOAD ====================

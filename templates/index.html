@@ -363,6 +363,12 @@ async function downloadUniversal() {
                 const sRes = await fetch(`/task-status/${taskId}`);
                 const sData = await sRes.json();
 
+                if (sRes.status === 404 && pollCount < 10) {
+                    // Task store me entry kabhi-kabhi ek poll late dikhti hai;
+                    // turant 'Task not found' dikhane ke bajaye kuch polls aur ruko.
+                    return;
+                }
+
                 if (sData.status === 'done') {
                     clearInterval(activePoll);
                     activePoll = null;
@@ -426,6 +432,12 @@ async function fetchYtDetails() {
             try {
                 const sRes = await fetch(`/task-status/${taskId}`);
                 const sData = await sRes.json();
+
+                if (sRes.status === 404 && pollCount < 10) {
+                    // Task store me entry kabhi-kabhi ek poll late dikhti hai;
+                    // turant 'Task not found' dikhane ke bajaye kuch polls aur ruko.
+                    return;
+                }
 
                 if (sData.status === 'done') {
                     clearInterval(activePoll);
@@ -522,6 +534,12 @@ async function downloadSelectedQuality() {
             try {
                 const sRes = await fetch(`/task-status/${taskId}`);
                 const sData = await sRes.json();
+
+                if (sRes.status === 404 && pollCount < 10) {
+                    // Task store me entry kabhi-kabhi ek poll late dikhti hai;
+                    // turant 'Task not found' dikhane ke bajaye kuch polls aur ruko.
+                    return;
+                }
 
                 if (sData.status === 'done') {
                     clearInterval(activePoll);
