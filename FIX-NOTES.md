@@ -1,5 +1,98 @@
-# Masai Downloader — Fix v1.4 (07 Nov 2026)
-# v1.1 + v1.2 + v1.3 + v1.4 — chaaron ek saath. Seedha yahi lagao.
+# Masai Downloader — Fix v1.5 (08 Nov 2026)
+# v1.1 + v1.2 + v1.3 + v1.4 + v1.5 — paanchon ek saath. Seedha yahi lagao.
+
+====================================================================
+v1.5 (NAYA): PO TOKEN — cookies ke baad ka aakhri aur asal ilaaj
+====================================================================
+
+## Kya hua tha (poori kahani ek saath)
+
+- Oregon (US) wali services par YouTube jawab hi nahi deta tha:
+  "Failed to extract any player response" (IP hi band thi).
+- Singapore wali service par darwaza khula — YouTube jawab deta hai,
+  lekin har baar ek hi baat: "Sign in to confirm you're not a bot".
+- Wahan TAAZI cookies (33 lines wali nayi export) lagane ke baad bhi
+  yahi aaya. Isse pakka ho gaya: **aaj ke YouTube par server se
+  download ke liye cookies akeli kaafi nahi hain.** Cookies ke saath
+  ek **PO Token** bhi chahiye — ek digital stamp jo sabit karta hai
+  ki request asli browser-jaisi hai. Ye token koi file nahi hoti jo
+  tum bana kar de do; ye har session ke liye ek chhoti service
+  (program) banati hai jo app ke saath chalti hai.
+
+## v1.5 me kya hai (3 files badli hain)
+
+1. `app.py` — Render par `POT_BASE_URL` naam ka variable diya ho to
+   app har YouTube request ke saath token service se token lekar
+   lagati hai (bgutil-ytdlp-pot-provider plugin ke zariye). Variable
+   na ho to app pehle ki tarah chalti hai. `/health` me ab
+   `pot_configured: true/false` bhi dikhta hai.
+2. `requirements.txt` — plugin `bgutil-ytdlp-pot-provider` joda.
+3. `render-build.sh` — har deploy par plugin bhi nayi version par
+   rehta hai (yt-dlp ki tarah).
+
+**Meri local jaanch (jo khud karke dekhi):** token service chali,
+usne asal PO token banaya, yt-dlp ne plugin ko pehchana, aur app ke
+zariye hue download me token service se sach me token mange gaye
+(server ke log me saaf dikha). Ek cheez meri test machine ki seema
+thi: yahan beech ke ek proxy ki wajah se kuch token-beech me ruk
+gaye — Render par woh proxy nahi hota, wahan service seedha token
+banayegi. Asli pariksha Render par hi hogi, isiliye neeche ke steps
+ke baad test mai khud karunga.
+
+====================================================================
+TUMHE KYA KARNA HAI (3 steps)
+====================================================================
+
+### Step 1: Token service banao (Render par, ~4 minute)
+1. Render Dashboard → **New +** → **Web Service**
+2. Upar ki taraf **"Deploy an existing image"** wala vikalp chuno
+   (Git repo wala nahi)
+3. Image URL me bilkul ye paste karo:
+   `brainicism/bgutil-ytdlp-pot-provider:latest`
+4. Name: `pot-provider` (kuch bhi chalega)
+5. **Region: Singapore** (app wali service ke saath ka hi rakho)
+6. Instance Type: **Free**
+7. **Environment** section me ek variable jodo:
+   Key = `PORT`, Value = `4416`
+   (ye batata hai ki Render is service ko kis darwaze par dhunde —
+   token service usi number par sunti hai)
+8. **Create Web Service** → deploy hone do (2-4 minute)
+9. Jo URL mile (jaise `pot-provider-xxxx.onrender.com`), browser me
+   uske aage `/ping` lagakar kholo — aisa jawab aana chahiye:
+   `{"server_uptime": ..., "version": "2.0.2"}`
+   Pehli baar 1 minute tak lag sakta hai (free service soti hai).
+
+### Step 2: v1.5 ka code lagao
+Is ZIP se **teen files** overwrite karo — `app.py`,
+`requirements.txt`, `render-build.sh` — phir GitHub par push.
+(Teeno services redeploy hongi, ye aam hai.)
+
+### Step 3: Singapore wali app ko token service ka pata do
+1. Render → **Videos-downloader** (Singapore wali service) →
+   **Environment**
+2. **Add Environment Variable**:
+   Key = `POT_BASE_URL`
+   Value = Step 1 wali token service ka **poora URL**
+   (jaise `https://pot-provider-xxxx.onrender.com` — aakhir me
+   slash `/` mat lagana)
+3. **Save Changes** — service naye code ke saath restart hogi.
+
+### Step 4: Bas mujhe bol do
+Uske baad /health mai khud padh lunga (`pot_configured: true`
+dikhna chahiye) aur test video bhi mai hi daalunga. Pehle try me
+2-4 minute lag sakte hain — token service jaagegi, token banega,
+phir video aayega. Ye der is baar "fail" nahi hogi, aam baat hai.
+
+### Dhyaan rahe
+- Token service ka URL khula (public) rahega — koi bhi usse token
+  banwa sakta hai. Isse tumhare YouTube account ko koi khatra nahi
+  (token login nahi hota, ye sirf ek stamp hai). Chaaho to baad me
+  isse band karne ki baat karenge.
+- Cookies (taazi wali) Singapore service par lagi rehne do — token
+  aur cookies **saath** kaam karte hain, ek dusre ki jagah nahi lete.
+
+====================================================================
+v1.4: Cookies lagane ke BAAD bhi wahi error — ab file khud
 
 ====================================================================
 v1.4 (NAYA): Cookies lagane ke BAAD bhi wahi error — ab file khud

@@ -107,6 +107,18 @@ if YOUTUBE_COOKIE is None:
                                ['youtube', 'yt_cookie', 'yt-cookie', 'ytcookies'])
     YOUTUBE_COOKIE = _adopt_cookie(_found, WRITABLE_YT_COOKIE)
 
+# ==================== v1.5: PO TOKEN PROVIDER ====================
+# YouTube ab server (datacenter) IP se aayi web request par cookies ke
+# saath-saath ek PO (Proof-of-Origin) Token bhi mangta hai - ek tarah ka
+# digital stamp jo sabit karta hai ki request asli browser-jaisi hai.
+# Bina token ke jawab hamesha ek hi aata hai: "Sign in to confirm you're
+# not a bot", chahe cookies ekdum taazi aur sahi hi kyun na hon (Singapore
+# service par 08 Nov ko yahi hua - taazi 33-line cookies ke baad bhi).
+# Token ek alag chhoti service (bgutil-ytdlp-pot-provider) banati hai;
+# uska URL Render par POT_BASE_URL env var me diya jata hai. Na diya ho
+# to app pehle ki tarah (bina token ke) chalti rehti hai.
+POT_BASE_URL = os.environ.get('POT_BASE_URL', '').strip().rstrip('/')
+
 # ==================== FFmpeg setup (v1.1 FIX - ASLI BUG) ====================
 # PURANA CODE SIRF DIRECTORY KO PATH ME DAALTA THA. Lekin imageio-ffmpeg ki
 # binary ka naam 'ffmpeg' NAHI hota - woh kuch aisa hota hai:
@@ -283,6 +295,13 @@ def get_yt_opts(player_client=None):
     }
     if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
         opts['cookiefile'] = YOUTUBE_COOKIE
+    # v1.5: PO Token provider laga ho to uska pata yt-dlp ke plugin ko do.
+    # Bina iske web clients par YouTube "Sign in to confirm you're not a
+    # bot" par atka rehta hai - cookies akeli ab kaafi nahi hain.
+    if POT_BASE_URL:
+        opts['extractor_args']['youtubepot-bgutilhttp'] = {
+            'base_url': [POT_BASE_URL]
+        }
     return opts
 
 # ==================== v1.3: CLIENT FALLBACK + SAHULIYAT WALE ERROR ====================
@@ -295,7 +314,9 @@ def get_yt_opts(player_client=None):
 #   3) visionos + android
 def yt_client_sets():
     sets = []
-    if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
+    # v1.5: PO Token laga ho to bhi WEB clients pehle - token inhi ke
+    # saath kaam karta hai, cookies hon ya na hon.
+    if POT_BASE_URL or (YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE)):
         sets.append(['default', 'web', 'web_safari', 'mweb'])
     sets.append(['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless'])
     sets.append(['visionos', 'android'])
@@ -351,10 +372,19 @@ def friendly_error(e):
     low = raw.lower()
     if 'failed to extract any player response' in low or \
        'sign in to confirm' in low or 'not a bot' in low:
+        if POT_BASE_URL:
+            ilaaj = ('Token service (POT) lagi hui hai, phir bhi YouTube ne rok diya — '
+                     'ho sakta hai token service so rahi ho ya band ho (uska /ping '
+                     'kholkar dekho), ya cookies expire ho gayi hon (taazi cookies '
+                     'lagao). Thodi der baad dobara try karna bhi kaam kar sakta hai.')
+        else:
+            ilaaj = ('Ilaaj: Render me apne YouTube login ki cookies lagao '
+                     '(Secret File: youtube_cookies.txt) aur PO Token service '
+                     '(POT_BASE_URL) jodo — aaj ke YouTube par server se download '
+                     'ke liye dono chahiye.')
         return ('YouTube ne is server (Render) ki request ko bot samajh kar rok diya. '
-                'Ye aksar server ki IP ki wajah se hota hai. Ilaaj: Render me apne YouTube '
-                'login ki cookies lagao (Secret File: youtube_cookies.txt) — uske baad '
-                'request tumhare account se jayegi aur ye rukawat hatt jayegi. '
+                'Ye aksar server ki IP ki wajah se hota hai. '
+                f'{ilaaj} '
                 f'(Asli error: {raw[:200]})')
     if 'this video is unavailable' in low or 'video unavailable' in low or \
        'private video' in low or 'login required' in low:
@@ -389,7 +419,8 @@ def health():
     yt_info = _cookie_info(YOUTUBE_COOKIE, check_domain='youtube.com')
     return jsonify({
         'ok': True,
-        'build': 'v1.4',
+        'build': 'v1.5',
+        'pot_configured': bool(POT_BASE_URL),
         'ffmpeg_exe': FFMPEG_EXE,
         'ffmpeg_exists': os.path.exists(FFMPEG_EXE),
         'ffmpeg_on_path': _sh.which('ffmpeg'),

@@ -2,3 +2,4 @@ flask
 yt-dlp>=2026.03.17
 gunicorn
 imageio-ffmpeg
+bgutil-ytdlp-pot-provider
