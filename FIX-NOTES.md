@@ -1,6 +1,64 @@
-# Masai Downloader — Fix v1.3 (07 Nov 2026)
-# v1.1 (ffmpeg) + v1.2 (Task not found) + v1.3 (YouTube extraction) — teeno ek saath.
-# Purana koi bhi ZIP lagaya ho ya na lagaya ho — seedha yahi lagao, baaki chhodo.
+# Masai Downloader — Fix v1.4 (07 Nov 2026)
+# v1.1 + v1.2 + v1.3 + v1.4 — chaaron ek saath. Seedha yahi lagao.
+
+====================================================================
+v1.4 (NAYA): Cookies lagane ke BAAD bhi wahi error — ab file khud
+dhoondhi jayegi aur /health asli wajah dikhayega
+====================================================================
+
+## Hua kya tha
+
+Cookies lagane ke baad bhi "Failed to extract any player response"
+aaya. Teen videos (jo mere yahan bilkul sahi chalte hain) Render par
+fail hue — matlab rukawat Render ki IP par hai, ye pakka hai. Lekin
+cookies ke baad bhi fail hone ka matlab hai: **ya to cookie file app
+tak pahunchi hi nahi, ya file me gadbad hai.** Pichla code sirf ek
+exact naam `/etc/secrets/youtube_cookies.txt` dekhta tha — naam me
+ek capital letter ya extra `.txt` bhi ho to file hote hue bhi nahi
+milti thi.
+
+## v1.4 me kya badla (sirf app.py)
+
+1. **Loose dhoondh:** ab app `/etc/secrets` aur apne folder me
+   youtube/yt naam wale saare kareebi variants khud dhoondh leti hai —
+   `YouTube Cookies.txt`, `yt_cookies.txt`, dash/underscore/capital,
+   sab chalega. (Masai wali cookies.txt ke liye bhi yahi.)
+2. **Ek aur fallback tarika:** embedded clients wala set aakhir me
+   aur jud gaya (kul 4 tarike ab).
+3. **/health ab jaanch-report hai.** Browser me
+   `masai-youtube-downloader.onrender.com/health` kholo — ye dikhega:
+   - `build: "v1.4"` → naya code live hai ya nahi
+   - `secret_files: [...]` → Render par lagi files ke NAAM (content
+     kabhi nahi dikhta) — cookie file wahan hai hi ya nahi, ek nazar me
+   - `youtube_cookie_present` → app ko file mili ya nahi
+   - `youtube_cookie_size_bytes` / `youtube_cookie_lines` → sahi
+     cookies file aam taur par kai KB ki aur darjanon line ki hoti
+     hai; bahut chhoti file = paste adhoora hua
+   - `youtube_cookie_has_yt_cookies` → file me youtube.com ki cookies
+     hain bhi ya nahi. **false** aaye to file galat jagah se export
+     hui hai — youtube.com kholkar, login karke, usi tab se dobara
+     export karna hoga
+   - `yt_dlp_version` → purani version bhi yahi error deti hai;
+     Build Command `./render-build.sh` hona chahiye
+
+## Tumhe kya karna hai
+
+1. ZIP se **sirf `app.py`** overwrite karke push karo (baaki files
+   v1.3 wali hi hain).
+2. Saath me Render → Environment → **Secret Files** kholkar dekho ki
+   tumhari cookie file wahan kis naam se lagi hai (ho sake to usi ka
+   screenshot bhej do).
+3. Deploy ke baad **/health ka screenshot** bhejo — upar wali 4-5
+   values dekhkar mai wahi se bata dunga gadbad kahan hai:
+   - secret_files me cookie file hi nahi → file galat jagah lagi hai
+   - present=true, has_yt=false → galat site se export hui file
+   - size bahut chhota → paste adhoora
+   - sab sahi, phir bhi fail → session/IP star ki rukawat hai,
+     phir Plan B (dusra host) par jayenge
+
+====================================================================
+v1.3: "Failed to extract any player response" — client fallback
+====================================================================
 
 ====================================================================
 BUG 3 (v1.3, naya): "Failed to extract any player response"

@@ -18,11 +18,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Cookie Setup (Masai ke liye)
-RENDER_SECRET_COOKIE = '/etc/secrets/cookies.txt'
-LOCAL_COOKIE = os.path.join(BASE_DIR, 'cookies.txt')
-WRITABLE_COOKIE = '/tmp/cookies.txt'
-
 def _cookie_from_env(env_name, writable_path):
     """Render par secret file lagana kabhi-kabhi fail hota hai; env var me
     Netscape cookie content diya ho to use writable file me likh do."""
@@ -36,30 +31,81 @@ def _cookie_from_env(env_name, writable_path):
     except Exception:
         return None
 
-MASAI_COOKIE = _cookie_from_env('MASAI_COOKIES', WRITABLE_COOKIE)
-if MASAI_COOKIE is None and os.path.exists(RENDER_SECRET_COOKIE):
+# ==================== v1.4: COOKIE FILE KI DHOONDH (loose matching) ====================
+# Pichli versions sirf exact jagah '/etc/secrets/youtube_cookies.txt'
+# dekhti thi. Filename me zara si bhi galti (capital letter, extra .txt,
+# dash ki jagah underscore) ho to file Render par hote hue bhi app ko
+# milti hi nahi thi - aur bina cookies ke YouTube Render ki IP ko jawab
+# nahi deta. Ab /etc/secrets aur app folder dono me naam ke kareeb-
+# kareeb saare variants dhoondhe jate hain.
+def _scan_cookie_file(directories, canonical, keywords):
+    """Pehle exact canonical naam, phir keywords wala koi bhi .txt.
+    Sirf pehla match lautata hai (path), na mile to None."""
+    for d in directories:
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            names = os.listdir(d)
+        except Exception:
+            continue
+        for n in names:
+            if n == canonical:
+                return os.path.join(d, n)
+        for n in names:
+            low = n.lower()
+            if low.endswith('.txt') and any(k in low for k in keywords):
+                return os.path.join(d, n)
+    return None
+
+def _adopt_cookie(found_path, writable_path):
+    """Mile hue cookie file ko writable jagah par copy karo (yt-dlp
+    cookies ko update karke wapas likhta hai; /etc/secrets read-only
+    hota hai). Copy fail ho to mili hui file hi istemal karo."""
+    if not found_path:
+        return None
     try:
-        shutil.copyfile(RENDER_SECRET_COOKIE, WRITABLE_COOKIE)
-        MASAI_COOKIE = WRITABLE_COOKIE
+        shutil.copyfile(found_path, writable_path)
+        return writable_path
     except Exception:
-        MASAI_COOKIE = RENDER_SECRET_COOKIE
-elif MASAI_COOKIE is None and os.path.exists(LOCAL_COOKIE):
-    MASAI_COOKIE = LOCAL_COOKIE
+        return found_path
+
+def _cookie_info(path, check_domain=None):
+    """Sirf ginti/naap batata hai - cookie ka content kabhi nahi.
+    /health se pata chalta hai: file mili? kitni badi hai? usme sahi
+    domain ki cookies hain bhi ya nahi (galat site se export hui file
+    me youtube.com ki cookies hi nahi hoti)."""
+    info = {'path': path, 'size_bytes': 0, 'lines': 0}
+    if check_domain:
+        info['has_domain_cookies'] = False
+    if not path or not os.path.exists(path):
+        return info
+    try:
+        info['size_bytes'] = os.path.getsize(path)
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for i, line in enumerate(f):
+                if i >= 5000:
+                    break
+                info['lines'] += 1
+                if check_domain and check_domain in line:
+                    info['has_domain_cookies'] = True
+    except Exception:
+        pass
+    return info
+
+# Cookie Setup (Masai ke liye)
+WRITABLE_COOKIE = '/tmp/cookies.txt'
+MASAI_COOKIE = _cookie_from_env('MASAI_COOKIES', WRITABLE_COOKIE)
+if MASAI_COOKIE is None:
+    _found = _scan_cookie_file(['/etc/secrets', BASE_DIR], 'cookies.txt', ['masai'])
+    MASAI_COOKIE = _adopt_cookie(_found, WRITABLE_COOKIE)
 
 # Cookie Setup (YouTube ke liye - bot-check bypass)
-RENDER_SECRET_YT_COOKIE = '/etc/secrets/youtube_cookies.txt'
-LOCAL_YT_COOKIE = os.path.join(BASE_DIR, 'youtube_cookies.txt')
 WRITABLE_YT_COOKIE = '/tmp/youtube_cookies.txt'
-
 YOUTUBE_COOKIE = _cookie_from_env('YOUTUBE_COOKIES', WRITABLE_YT_COOKIE)
-if YOUTUBE_COOKIE is None and os.path.exists(RENDER_SECRET_YT_COOKIE):
-    try:
-        shutil.copyfile(RENDER_SECRET_YT_COOKIE, WRITABLE_YT_COOKIE)
-        YOUTUBE_COOKIE = WRITABLE_YT_COOKIE
-    except Exception:
-        YOUTUBE_COOKIE = RENDER_SECRET_YT_COOKIE
-elif YOUTUBE_COOKIE is None and os.path.exists(LOCAL_YT_COOKIE):
-    YOUTUBE_COOKIE = LOCAL_YT_COOKIE
+if YOUTUBE_COOKIE is None:
+    _found = _scan_cookie_file(['/etc/secrets', BASE_DIR], 'youtube_cookies.txt',
+                               ['youtube', 'yt_cookie', 'yt-cookie', 'ytcookies'])
+    YOUTUBE_COOKIE = _adopt_cookie(_found, WRITABLE_YT_COOKIE)
 
 # ==================== FFmpeg setup (v1.1 FIX - ASLI BUG) ====================
 # PURANA CODE SIRF DIRECTORY KO PATH ME DAALTA THA. Lekin imageio-ffmpeg ki
@@ -253,6 +299,10 @@ def yt_client_sets():
         sets.append(['default', 'web', 'web_safari', 'mweb'])
     sets.append(['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless'])
     sets.append(['visionos', 'android'])
+    # Aakhri koshish: embedded clients. Bot-wall ke peeche ye aksar alag
+    # bartav karte hain; embed-allowed videos (zyadaatar gaane) inpar
+    # kabhi-kabhi nikal aate hain jab baaki sab fail ho jayein.
+    sets.append(['web_embedded', 'tv_embedded'])
     unique = []
     for s in sets:
         if s not in unique:
@@ -330,14 +380,27 @@ def health():
     jayega ki ffmpeg mil raha hai ya nahi aur cookies lagi hain ya nahi.
     Sirf True/False batata hai, cookie ka content kabhi nahi."""
     import shutil as _sh
+    # Secret Files ke sirf NAAM (content kabhi nahi) - isse ek nazar me
+    # pata chal jata hai ki file Render par kis naam se lagi hai.
+    try:
+        secret_files = sorted(os.listdir('/etc/secrets'))
+    except Exception:
+        secret_files = []
+    yt_info = _cookie_info(YOUTUBE_COOKIE, check_domain='youtube.com')
     return jsonify({
         'ok': True,
+        'build': 'v1.4',
         'ffmpeg_exe': FFMPEG_EXE,
         'ffmpeg_exists': os.path.exists(FFMPEG_EXE),
         'ffmpeg_on_path': _sh.which('ffmpeg'),
         'yt_dlp_version': yt_dlp.version.__version__,
         'masai_cookie_present': bool(MASAI_COOKIE and os.path.exists(MASAI_COOKIE)),
+        'masai_cookie_size_bytes': _cookie_info(MASAI_COOKIE)['size_bytes'],
         'youtube_cookie_present': bool(YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE)),
+        'youtube_cookie_size_bytes': yt_info['size_bytes'],
+        'youtube_cookie_lines': yt_info['lines'],
+        'youtube_cookie_has_yt_cookies': yt_info.get('has_domain_cookies'),
+        'secret_files': secret_files,
         'task_store': 'sqlite',
         'task_db_exists': os.path.exists(DB_PATH),
     })
