@@ -263,9 +263,10 @@ def extract_video_id(url):
             return m.group(1)
     return None
 
-def get_yt_opts(player_client=None):
+def get_yt_opts(player_client=None, use_cookies=True):
     """YouTube ke liye yt-dlp options. player_client diya ho to wahi set
-    use hota hai, warna default combo."""
+    use hota hai, warna default combo. use_cookies=False par cookiefile
+    nahi bheja jata (v1.6: kuch koshishein bina login ke bhi hoti hain)."""
     if player_client is None:
         # YouTube's 2025-2026 SABR rollout strips playable formats
         # from the plain 'web' clients unless a PO (Proof-of-Origin)
@@ -293,7 +294,7 @@ def get_yt_opts(player_client=None):
             'Sec-Fetch-Mode': 'navigate'
         }
     }
-    if YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
+    if use_cookies and YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE):
         opts['cookiefile'] = YOUTUBE_COOKIE
     # v1.5: PO Token provider laga ho to uska pata yt-dlp ke plugin ko do.
     # Bina iske web clients par YouTube "Sign in to confirm you're not a
@@ -304,31 +305,52 @@ def get_yt_opts(player_client=None):
         }
     return opts
 
-# ==================== v1.3: CLIENT FALLBACK + SAHULIYAT WALE ERROR ====================
+# ==================== v1.6: CLIENT + LOGIN JODI FALLBACK ====================
 # Render ki IP par YouTube aksar pehle client set ko jawab hi nahi deta
-# ("Failed to extract any player response") jabki dusra set chal jata hai.
-# Isliye ab ek ke baad ek kai client sets try hote hain:
-#   1) Cookies lagi hon to pehle WEB clients (cookies inhi ke saath sabse
-#      achhi chalti hain; TV clients cookies ko thik se istemal nahi karte)
-#   2) TV combo (bina cookies ke abhi tak ka sabse bharosemand)
-#   3) visionos + android
-def yt_client_sets():
-    sets = []
-    # v1.5: PO Token laga ho to bhi WEB clients pehle - token inhi ke
-    # saath kaam karta hai, cookies hon ya na hon.
-    if POT_BASE_URL or (YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE)):
-        sets.append(['default', 'web', 'web_safari', 'mweb'])
-    sets.append(['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless'])
-    sets.append(['visionos', 'android'])
-    # Aakhri koshish: embedded clients. Bot-wall ke peeche ye aksar alag
-    # bartav karte hain; embed-allowed videos (zyadaatar gaane) inpar
-    # kabhi-kabhi nikal aate hain jab baaki sab fail ho jayein.
-    sets.append(['web_embedded', 'tv_embedded'])
-    unique = []
-    for s in sets:
-        if s not in unique:
-            unique.append(s)
-    return unique
+# ("Failed to extract any player response") jabki dusra set chal jata hai,
+# isliye hamesha kai client sets ek ke baad ek try hote hain.
+# v1.6 ka saboot (2026-11-09, live test): POT + cookies lagne ke baad bot
+# wali deewaar ("Sign in to confirm you're not a bot") to gir gayi, lekin
+# LOGIN wale session ke saath HAR client set par formats bina asli URL ke
+# aaye - "Requested format is not available". YouTube apne naye SABR
+# system me kuch login sessions ke formats rok deta hai. Wahi video bina
+# login ke, sirf POT token ke saath, saaf 1080p formats deta hai (local
+# pariksha me pakka hua). Isliye ab har client set do roop me try hota
+# hai - login ke saath aur bina login ke - taaki ek band rasta dusre ko
+# na rok sake. Koi ek jodi chal jaye, wahi kaafi hai.
+_WEB_SET = ['default', 'web', 'web_safari', 'mweb']
+_TV_SET = ['tv_embedded', 'tv', 'android_vr', 'default', '-android_sdkless']
+_MOB_SET = ['visionos', 'android']
+_EMB_SET = ['web_embedded', 'tv_embedded']
+
+def _attempt_plan():
+    """(clients, use_cookies, label) ki koshish-suchi - sabse zyada
+    ummeed wali jodi pehle."""
+    has_cookies = bool(YOUTUBE_COOKIE and os.path.exists(YOUTUBE_COOKIE))
+    plan = []
+    if POT_BASE_URL or has_cookies:
+        if has_cookies:
+            plan.append((_WEB_SET, True, 'web+login'))
+        if POT_BASE_URL:
+            plan.append((_WEB_SET, False, 'web+token'))
+    plan.append((_TV_SET, False, 'tv'))
+    if has_cookies:
+        plan.append((_TV_SET, True, 'tv+login'))
+    plan.append((_MOB_SET, False, 'visionos'))
+    if has_cookies:
+        plan.append((_MOB_SET, True, 'visionos+login'))
+    if has_cookies:
+        plan.append((_EMB_SET, True, 'embedded+login'))
+    plan.append((_EMB_SET, False, 'embedded'))
+    seen = set()
+    out = []
+    for clients, use_cookies, label in plan:
+        key = (tuple(clients), use_cookies)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((clients, use_cookies, label))
+    return out
 
 # In shabdon wale error par dusra client set try karna faydemand hai.
 # Baaki errors (jaise ffmpeg merge fail) par dobara try sirf samay kharab karega.
@@ -342,13 +364,14 @@ def _should_fallback(err):
     return any(h in msg for h in _FALLBACK_HINTS)
 
 def extract_with_fallback(url, download=False, extra_opts=None):
-    """Client sets ek-ek karke try karta hai. Safal ho to (info, filename)
-    lautata hai; sab fail ho jayein to aakhri error uthata hai.
+    """Har (client set, login hai ya nahi) jodi ek-ek karke try karta hai.
+    Safal ho to (info, filename) lautata hai; sab fail ho jayein to har
+    koshish ki galti ka saar uthata hai, taaki asli wajah dikhe.
     Download ke case me bhi yahi istemal hota hai - merge jaisi gair-
     extraction galtiyon par fallback nahi hota."""
-    last_err = None
-    for clients in yt_client_sets():
-        opts = get_yt_opts(clients)
+    attempts = []
+    for clients, use_cookies, label in _attempt_plan():
+        opts = get_yt_opts(clients, use_cookies=use_cookies)
         if extra_opts:
             opts.update(extra_opts)
         try:
@@ -357,12 +380,12 @@ def extract_with_fallback(url, download=False, extra_opts=None):
                 filename = ydl.prepare_filename(info) if download else None
                 return info, filename
         except Exception as e:
-            last_err = e
+            attempts.append(f'{label}: {clean_ansi(str(e))[:140]}')
             if download and not _should_fallback(e):
                 raise
             continue
-    if last_err:
-        raise last_err
+    if attempts:
+        raise Exception('Sab koshishein fail: ' + ' || '.join(attempts))
     raise Exception('YouTube se koi jawab nahi aaya.')
 
 def friendly_error(e):
@@ -370,6 +393,14 @@ def friendly_error(e):
     wajah aur ilaaj turant samajh aaye. Asli error aakhir me rehta hai."""
     raw = clean_ansi(str(e))
     low = raw.lower()
+    if 'requested format is not available' in low:
+        return ('YouTube ne video tak pahunch to de di, lekin download wale formats rok diye — '
+                'ye uske naye SABR system ki wajah se hota hai: kuch login sessions par formats '
+                'band ho jate hain. App ne login ke saath aur bina login ke kai clients try kiye '
+                'hain. Phir bhi ye aaye to: (1) token service ka /ping kholkar dekho ki woh chal '
+                'rahi hai ya nahi, (2) thodi der baad dobara try karo — YouTube ki ye rok aksar '
+                'kuch ghanton me khud hat jati hai. '
+                f'(Asli error: {raw[:400]})')
     if 'failed to extract any player response' in low or \
        'sign in to confirm' in low or 'not a bot' in low:
         if POT_BASE_URL:
@@ -419,7 +450,7 @@ def health():
     yt_info = _cookie_info(YOUTUBE_COOKIE, check_domain='youtube.com')
     return jsonify({
         'ok': True,
-        'build': 'v1.5',
+        'build': 'v1.6',
         'pot_configured': bool(POT_BASE_URL),
         'ffmpeg_exe': FFMPEG_EXE,
         'ffmpeg_exists': os.path.exists(FFMPEG_EXE),
@@ -628,8 +659,8 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
             # set se pehle saaf kar do taaki ZIP me kachra na jaye.
             last_err = None
             downloaded = False
-            for clients in yt_client_sets():
-                dl_opts = get_yt_opts(clients)
+            for clients, use_cookies, _label in _attempt_plan():
+                dl_opts = get_yt_opts(clients, use_cookies=use_cookies)
                 dl_opts.update(fmt_opts)
                 try:
                     with yt_dlp.YoutubeDL(dl_opts) as ydl:
