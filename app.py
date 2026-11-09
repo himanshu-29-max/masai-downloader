@@ -305,7 +305,7 @@ def get_yt_opts(player_client=None, use_cookies=True):
         }
     return opts
 
-# ==================== v1.6: CLIENT + LOGIN JODI FALLBACK ====================
+# ==================== v1.7: CLIENT + LOGIN JODI FALLBACK ====================
 # Render ki IP par YouTube aksar pehle client set ko jawab hi nahi deta
 # ("Failed to extract any player response") jabki dusra set chal jata hai,
 # isliye hamesha kai client sets ek ke baad ek try hote hain.
@@ -333,6 +333,14 @@ def _attempt_plan():
             plan.append((_WEB_SET, True, 'web+login'))
         if POT_BASE_URL:
             plan.append((_WEB_SET, False, 'web+token'))
+    if has_cookies:
+        # v1.7: teen login-wale roop jo abhi tak try nahi hue the. Ye
+        # teeno formats aksar dusre clients se alag raste par dete hain:
+        # ios (HLS playlist wala rasta), web_creator (YouTube Studio ka
+        # apna client) aur android (login ke saath poori list deta hai).
+        plan.append((['ios'], True, 'ios+login'))
+        plan.append((['web_creator'], True, 'creator+login'))
+        plan.append((['android'], True, 'android+login'))
     plan.append((_TV_SET, False, 'tv'))
     if has_cookies:
         plan.append((_TV_SET, True, 'tv+login'))
@@ -385,7 +393,11 @@ def extract_with_fallback(url, download=False, extra_opts=None):
                 raise
             continue
     if attempts:
-        raise Exception('Sab koshishein fail: ' + ' || '.join(attempts))
+        err = Exception('Sab koshishein fail: ' + ' || '.join(attempts))
+        # Har koshish ki galti alag se bhi rakho - task status me bina
+        # kate dikhegi, taaki agli jaanch me koi koshish andekhi na rahe.
+        err.attempts = attempts
+        raise err
     raise Exception('YouTube se koi jawab nahi aaya.')
 
 def friendly_error(e):
@@ -400,7 +412,7 @@ def friendly_error(e):
                 'hain. Phir bhi ye aaye to: (1) token service ka /ping kholkar dekho ki woh chal '
                 'rahi hai ya nahi, (2) thodi der baad dobara try karo — YouTube ki ye rok aksar '
                 'kuch ghanton me khud hat jati hai. '
-                f'(Asli error: {raw[:400]})')
+                f'(Asli error: {raw[:1800]})')
     if 'failed to extract any player response' in low or \
        'sign in to confirm' in low or 'not a bot' in low:
         if POT_BASE_URL:
@@ -450,7 +462,7 @@ def health():
     yt_info = _cookie_info(YOUTUBE_COOKIE, check_domain='youtube.com')
     return jsonify({
         'ok': True,
-        'build': 'v1.6',
+        'build': 'v1.7',
         'pot_configured': bool(POT_BASE_URL),
         'ffmpeg_exe': FFMPEG_EXE,
         'ffmpeg_exists': os.path.exists(FFMPEG_EXE),
@@ -586,7 +598,8 @@ def run_fetch_youtube_info(task_id, raw_url):
             'resolutions': sorted_heights
         }
     except Exception as e:
-        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e)}
+        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e),
+                          'attempts': getattr(e, 'attempts', None)}
 
 @app.route('/fetch-youtube-info', methods=['POST'])
 def fetch_youtube_info():
@@ -704,7 +717,8 @@ def run_youtube_download(task_id, raw_url, quality, is_playlist):
             else:
                 TASKS[task_id] = {'status': 'error', 'error': 'Video merge process failed.'}
     except Exception as e:
-        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e)}
+        TASKS[task_id] = {'status': 'error', 'error': friendly_error(e),
+                          'attempts': getattr(e, 'attempts', None)}
     finally:
         # Always clean up the per-playlist working folder, even if the
         # download failed partway through - previously a failed playlist

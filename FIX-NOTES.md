@@ -1,56 +1,60 @@
-# Masai Downloader — Fix v1.6 (sirf app.py badla hai)
+# Masai Downloader — Fix v1.7 (sirf app.py badla hai)
 
-## Is baar kya hua (saboot ke saath)
+## Pehle, pichli jaanch ka pakka natija
 
-v1.5 + POT + cookies ke baad YouTube ki sabse badi deewaar **gir gayi**:
-ab "Sign in to confirm you're not a bot" nahi aata. Uske badle naya error
-aaya — **"Requested format is not available"**.
+Token service ke Logs ne saaf dikha diya (9 Nov, 09:19 AM):
+**app token asal me le rahi hai.** POT service ne app ki maang par
+us video (LGe0xwz5cv4) ke liye token banakar diye. Matlab:
 
-Iska matlab: YouTube ne app ko video tak pahunchne to diya (token aur
-login dono kubool hue), lekin **download wale formats rok diye**. Ye
-YouTube ke naye **SABR** system ki wajah se hota hai — kuch login
-sessions ke saath woh har client (web/TV/Android) par formats bina asli
-URL ke deta hai, isliye koi format chuna hi nahi ja pata.
+- POT_BASE_URL sahi laga hai ✅
+- Render par plugin chal raha hai ✅
+- Token service sahi jawab de rahi hai ✅
 
-Local pariksha (usi video LGe0xwz5cv4 par) me pakka hua:
-- **Bina login ke, sirf POT token ke saath** — wahi video saaf milta hai:
-  47 formats, 1080p tak.
-- Login wale session ke saath hi formats rukte hain.
+Phir bhi YouTube formats nahi de raha. Bachi hui sabse majboot wajah:
+**YouTube, Render ke Singapore wale server-pate (IP) aur is login ki
+jodi ko sabse sakht wali rok laga raha hai** — bina login ke token ke
+saath bhi bot deewaar, login ke saath deewaar paar lekin formats band.
+(Wahi token-jod kisi aam pate se bilkul chalti hai — woh pariksha ho
+chuki hai.)
 
-## v1.6 me kya badla
+## v1.7 me kya badla — aakhri teen login-wale roop
 
-App ab har kaam ke liye **(client set × login hai ya nahi) ki jodiyan**
-ek ke baad ek try karti hai:
+v1.6 ki koshishon ke baad teen aise client roop bache the jo **login ke
+saath kabhi try hi nahi hue**, aur ye teeno formats aksar dusre raste
+se dete hain:
 
-1. web + login (cookies + token) — pehle wali koshish
-2. **web + sirf token (bina cookies)** — nayi, sabse zyada ummeed wali
-3. TV set bina login ke
-4. TV set login ke saath
-5. visionos/Android bina login ke
-6. visionos/Android login ke saath
-7. embedded (login ke saath, phir bina login ke)
+1. **ios + login** — iPhone wala client; formats playlist (HLS) ke
+   raste deta hai, jahan SABR wali rok aksar nahi lagti
+2. **creator + login** — YouTube Studio ka apna client (web_creator);
+   tumhara account Studio khol sakta hai, isliye ye rasta khula hai
+3. **android + login** — Android app wala client login ke saath
 
-- Koi ek jodi chal jaye, kaam ho gaya. Sab fail ho jayein to error me
-  **har koshish ki galti alag-alag** dikhegi (kaunsi jodi kahan atki),
-  taaki agli baar andaza na lagana pade.
-- "Formats roke gaye" wale error ke liye UI me ab alag, saaf sandesh
-  aayega (bot wale sandesh se alag).
-- Playlist download wala rasta bhi yahi nayi jodiyan istemal karta hai.
-- /health me ab `build: v1.6` dikhega.
+Poora kram ab: web+login → web+token → **ios+login → creator+login →
+android+login** → tv → tv+login → visionos → visionos+login →
+embedded+login → embedded (kul 11 koshishein).
+
+## Saath me ek zaroori sudhaar — ab koi saboot chhupega nahi
+
+v1.6 ke test me error aadha kat gaya tha, isliye aadhi koshishon ka
+natija dikha hi nahi. v1.7 me **har koshish ki galti task ke saath alag
+se save hoti hai** — /task-status ke jawab me `attempts` naam se poori
+suchi milegi. Is baar jo hoga, poora dikhega.
+
+/health me ab `build: v1.7` dikhega.
 
 ## Tumhe kya karna hai
 
-1. Is ZIP se **sirf `app.py`** apne project me overwrite karo.
-   (requirements.txt / render-build.sh v1.5 wale hi rahenge — is baar
-   unme koi badlaav nahi.)
-2. `git push` — teeno services par auto-deploy hoga, lekin test sirf
-   **Singapore wali Videos-downloader** par hoga (usi par POT laga hai).
-3. Bas "push ho gaya" bol do — /health aur video test **mai khud
-   karunga** (usi Matrices wale video par pehle, phir ek gaane par).
+1. ZIP se **sirf `app.py`** overwrite karo
+2. `git push`
+3. "Push ho gaya" bolo — test mai khud karunga (is baar test thoda
+   lamba chal sakta hai, 11 koshishon ki wajah se ~2-4 minute)
 
-## Ek imandaar baat
+## Imandaar baat
 
-Ye fix local pariksha me bilkul chala hai (web+token jodi ne pehli hi
-koshish me 47 formats diye). Lekin Render ke mahaul me asli saboot
-push ke baad ke live test se hi milega — isiliye "fix ho gaya" mai
-tabhi kahunga jab Singapore wali site se video asal me nikal aaye.
+Ye code ki taraf se **aakhri bacha hua daav** hai. Agar ye teenon naye
+roop bhi formats na dein, to baat pakki ho jayegi ki rok code se paar
+nahi hogi — phir do hi raste bachenge, jinme se ek tumhe chunna hoga:
+(1) chhota sa paid **residential proxy** (server ka pata aam ghar-wale
+internet jaisa dikhega), ya (2) YouTube tab ko server se hata kar
+sirf Masai/Direct tab rakhna. Us faisle ke liye mai dono ke daam aur
+tafseel taiyaar karke dunga — pehle v1.7 ka natija dekh lete hain.
