@@ -11,3 +11,11 @@ __pycache__/
 *.m4a
 *.mp3
 *.zip
+dist_builder/bundle/
+dist_builder/wheels/
+dist_builder/*.zip
+dist_builder/*.res
+dist_builder/*.exe
+dist/
+run_err.log
+app.log
